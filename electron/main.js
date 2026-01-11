@@ -47,11 +47,17 @@ function startBackend() {
   })
 
   backendProcess.stdout.on('data', (data) => {
-    console.log(`Backend: ${data}`)
+    console.log(`[Backend] ${data}`)
   })
 
   backendProcess.stderr.on('data', (data) => {
-    console.error(`Backend Error: ${data}`)
+    // Uvicorn outputs INFO logs to stderr, so don't treat them as errors
+    const message = data.toString()
+    if (message.includes('INFO:') || message.includes('Uvicorn running')) {
+      console.log(`[Backend] ${message}`)
+    } else {
+      console.error(`[Backend Error] ${message}`)
+    }
   })
 
   backendProcess.on('close', (code) => {
