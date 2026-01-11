@@ -1,0 +1,11 @@
+{
+  "ports": {
+    "backend": 54321,
+    "frontend": 54320
+  },
+  "aws": {
+    "identityStoreId": "d-9267425629",
+    "ssoInstanceArn": "arn:aws:sso:::instance/ssoins-79076f318b0ce4c4",
+    "accountId": "776809830581"
+  }
+}
