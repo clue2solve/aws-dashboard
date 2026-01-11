@@ -3,6 +3,12 @@ set -e
 
 echo "Building AWS Dashboard..."
 
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+    echo "ERROR: Docker is not running. Please start Docker Desktop first."
+    exit 1
+fi
+
 # Build frontend
 echo "Building frontend..."
 cd frontend
