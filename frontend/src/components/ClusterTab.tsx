@@ -58,6 +58,7 @@ import LayersIcon from '@mui/icons-material/Layers'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 
 interface EksCluster {
   name: string
@@ -1541,9 +1542,31 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
             </Typography>
           </Alert>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            To confirm, type the cluster name: <strong>{clusterToStop}</strong>
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              To confirm, type the cluster name:
+            </Typography>
+            <Chip
+              label={clusterToStop}
+              size="small"
+              deleteIcon={<ContentCopyIcon sx={{ fontSize: '14px !important' }} />}
+              onDelete={() => {
+                navigator.clipboard.writeText(clusterToStop || '')
+              }}
+              onClick={() => {
+                navigator.clipboard.writeText(clusterToStop || '')
+              }}
+              sx={{
+                fontFamily: 'monospace',
+                fontWeight: 600,
+                cursor: 'pointer',
+                '& .MuiChip-deleteIcon': {
+                  color: 'inherit',
+                  '&:hover': { color: 'primary.main' }
+                }
+              }}
+            />
+          </Box>
 
           <TextField
             fullWidth
