@@ -1,0 +1,25 @@
+{
+  "name": "aws-dashboard-monorepo",
+  "version": "1.0.0",
+  "description": "AWS Dashboard for EKS cluster management",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "cd backend && source venv/bin/activate && python main.py",
+    "start:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build",
+    "install:all": "npm install && cd frontend && npm install && cd ../electron && npm install",
+    "electron:dev": "cd electron && npm run start:dev",
+    "electron:build": "npm run build:frontend && cd electron && npm run build:mac",
+    "setup": "cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clue2solve/aws-dashboard.git"
+  },
+  "author": "Clue2Solve",
+  "license": "MIT"
+}

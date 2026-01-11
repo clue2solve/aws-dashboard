@@ -43,12 +43,10 @@ import WarningIcon from '@mui/icons-material/Warning'
 import ViewInArIcon from '@mui/icons-material/ViewInAr'
 import SettingsIcon from '@mui/icons-material/Settings'
 import DnsIcon from '@mui/icons-material/Dns'
-import LinkIcon from '@mui/icons-material/Link'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import UpgradeIcon from '@mui/icons-material/Upgrade'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import AllInclusiveIcon from '@mui/icons-material/AllInclusive'
-import SearchIcon from '@mui/icons-material/Search'
 import KeyboardIcon from '@mui/icons-material/Keyboard'
 import StorageIcon from '@mui/icons-material/Storage'
 import LockIcon from '@mui/icons-material/Lock'
@@ -58,7 +56,6 @@ import EventIcon from '@mui/icons-material/Event'
 import ComputerIcon from '@mui/icons-material/Computer'
 import LayersIcon from '@mui/icons-material/Layers'
 import FilterListIcon from '@mui/icons-material/FilterList'
-import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
 
@@ -324,7 +321,8 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   const [upgradeStatuses, setUpgradeStatuses] = useState<Record<string, UpgradeStatus>>({})
   const [selectedEksCluster, setSelectedEksCluster] = useState<string>('')
   const [eksLoading, setEksLoading] = useState(true)
-  const [connecting, setConnecting] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_connecting, setConnecting] = useState(false)
 
   // Kubernetes state
   const [namespaces, setNamespaces] = useState<Namespace[]>([])
@@ -1218,7 +1216,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                               <TableCell key={col.key}>
                                 {col.key === 'status' || col.key === 'type' ? (
                                   <Chip
-                                    icon={getStatusIcon(row[col.key])}
+                                    icon={getStatusIcon(row[col.key]) || undefined}
                                     label={row[col.key]}
                                     size="small"
                                     color={getStatusColor(row[col.key]) as any}
@@ -1339,7 +1337,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                       fetchResources(selectedEksCluster, rt.key)
                     }
                   }}
-                  selected={selectedResourceType === rt.key || (commandSearch && index === 0)}
+                  selected={selectedResourceType === rt.key || (!!commandSearch && index === 0)}
                   sx={{ py: 1.5 }}
                 >
                   <ListItemIcon sx={{ minWidth: 40 }}>{rt.icon}</ListItemIcon>

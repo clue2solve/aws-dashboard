@@ -15,7 +15,15 @@ AWS-related identifiers are stored in `config.json` -> `aws`:
 ## Project Structure
 - `/backend` - FastAPI backend (Python)
 - `/frontend` - React frontend with MUI and Framer Motion (TypeScript)
+- `/electron` - Electron desktop app wrapper
 
 ## Running the Application
+
+### Web Version
 1. Backend: `cd backend && pip install -r requirements.txt && python main.py`
 2. Frontend: `cd frontend && npm install && npm run dev`
+3. Or use: `npm start` from root (runs both concurrently)
+
+### Desktop App (Electron)
+1. Development: `npm run electron:dev` (starts backend automatically)
+2. Build: `npm run electron:build` (creates .app bundle)

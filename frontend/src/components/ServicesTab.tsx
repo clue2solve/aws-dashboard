@@ -11,7 +11,6 @@ import {
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import StorageIcon from '@mui/icons-material/Storage'
-import CloudQueueIcon from '@mui/icons-material/CloudQueue'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 
 interface Service {
