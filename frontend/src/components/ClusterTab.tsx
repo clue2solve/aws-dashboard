@@ -1571,21 +1571,33 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
           <TextField
             autoFocus
             fullWidth
-            placeholder="Type resource name (pods, deploy, svc...)"
+            placeholder={commandSearch.toLowerCase().startsWith('ns') ? "Select namespace..." : "Type resource name or 'ns' for namespaces..."}
             value={commandSearch}
             onChange={(e) => setCommandSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                const filtered = RESOURCE_TYPES.filter(rt =>
-                  rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
-                  rt.key.toLowerCase().includes(commandSearch.toLowerCase())
-                )
-                if (filtered.length > 0) {
-                  setSelectedResourceType(filtered[0].key)
-                  setCommandPaletteOpen(false)
-                  setCommandSearch('')
-                  if (selectedEksCluster) {
-                    fetchResources(selectedEksCluster, filtered[0].key)
+                // Handle namespace selection
+                if (commandSearch.toLowerCase().startsWith('ns')) {
+                  const nsSearch = commandSearch.slice(2).trim().toLowerCase()
+                  const filtered = [{ name: '__all__', label: 'All Namespaces' }, ...namespaces.map(n => ({ name: n.name, label: n.name }))]
+                    .filter(ns => !nsSearch || ns.label.toLowerCase().includes(nsSearch))
+                  if (filtered.length > 0) {
+                    setSelectedNamespace(filtered[0].name)
+                    setCommandPaletteOpen(false)
+                    setCommandSearch('')
+                  }
+                } else {
+                  const filtered = RESOURCE_TYPES.filter(rt =>
+                    rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
+                    rt.key.toLowerCase().includes(commandSearch.toLowerCase())
+                  )
+                  if (filtered.length > 0) {
+                    setSelectedResourceType(filtered[0].key)
+                    setCommandPaletteOpen(false)
+                    setCommandSearch('')
+                    if (selectedEksCluster) {
+                      fetchResources(selectedEksCluster, filtered[0].key)
+                    }
                   }
                 }
               }
@@ -1609,29 +1621,66 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
           />
         </Box>
         <List sx={{ maxHeight: 400, overflow: 'auto', py: 0 }}>
-          {RESOURCE_TYPES
-            .filter(rt =>
-              !commandSearch ||
-              rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
-              rt.key.toLowerCase().includes(commandSearch.toLowerCase())
-            )
-            .map((rt, index) => (
-              <ListItem key={rt.key} disablePadding>
-                <ListItemButton
-                  onClick={() => {
-                    setSelectedResourceType(rt.key)
-                    setCommandPaletteOpen(false)
-                    setCommandSearch('')
-                    if (selectedEksCluster) {
-                      fetchResources(selectedEksCluster, rt.key)
-                    }
-                  }}
-                  selected={selectedResourceType === rt.key || (!!commandSearch && index === 0)}
-                  sx={{ py: 1.5 }}
-                >
-                  <ListItemIcon sx={{ minWidth: 40 }}>{rt.icon}</ListItemIcon>
-                  <ListItemText
-                    primary={rt.label}
+          {/* Show namespaces if command starts with 'ns' */}
+          {commandSearch.toLowerCase().startsWith('ns') ? (
+            <>
+              {[{ name: '__all__', label: 'All Namespaces' }, ...namespaces.map(n => ({ name: n.name, label: n.name }))]
+                .filter(ns => {
+                  const nsSearch = commandSearch.slice(2).trim().toLowerCase()
+                  return !nsSearch || ns.label.toLowerCase().includes(nsSearch)
+                })
+                .map((ns, index) => (
+                  <ListItem key={ns.name} disablePadding>
+                    <ListItemButton
+                      onClick={() => {
+                        setSelectedNamespace(ns.name)
+                        setCommandPaletteOpen(false)
+                        setCommandSearch('')
+                      }}
+                      selected={selectedNamespace === ns.name || index === 0}
+                      sx={{ py: 1.5 }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 40 }}>
+                        <FolderIcon color={ns.name === '__all__' ? 'primary' : 'inherit'} />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={ns.label}
+                        secondary={ns.name === '__all__' ? 'Show resources from all namespaces' : undefined}
+                        primaryTypographyProps={{ fontWeight: selectedNamespace === ns.name ? 600 : 400 }}
+                      />
+                      {selectedNamespace === ns.name && (
+                        <Chip label="current" size="small" color="primary" variant="outlined" />
+                      )}
+                    </ListItemButton>
+                  </ListItem>
+                ))
+              }
+            </>
+          ) : (
+            /* Show resource types */
+            RESOURCE_TYPES
+              .filter(rt =>
+                !commandSearch ||
+                rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
+                rt.key.toLowerCase().includes(commandSearch.toLowerCase())
+              )
+              .map((rt, index) => (
+                <ListItem key={rt.key} disablePadding>
+                  <ListItemButton
+                    onClick={() => {
+                      setSelectedResourceType(rt.key)
+                      setCommandPaletteOpen(false)
+                      setCommandSearch('')
+                      if (selectedEksCluster) {
+                        fetchResources(selectedEksCluster, rt.key)
+                      }
+                    }}
+                    selected={selectedResourceType === rt.key || (!!commandSearch && index === 0)}
+                    sx={{ py: 1.5 }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 40 }}>{rt.icon}</ListItemIcon>
+                    <ListItemText
+                      primary={rt.label}
                     secondary={rt.key}
                     primaryTypographyProps={{ fontWeight: 500 }}
                     secondaryTypographyProps={{ sx: { fontFamily: 'monospace', fontSize: '0.75rem' } }}
@@ -1639,7 +1688,8 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                   <Chip label={rt.shortcut} size="small" variant="outlined" sx={{ mr: 1 }} />
                 </ListItemButton>
               </ListItem>
-            ))}
+            ))
+          )}
         </List>
       </Dialog>
 
