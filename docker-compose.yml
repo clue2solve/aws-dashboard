@@ -8,10 +8,10 @@ services:
       - AWS_REGION=${AWS_REGION:-us-west-2}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-west-2}
     volumes:
-      # Mount AWS credentials
+      # Mount AWS credentials (read-only)
       - ~/.aws:/root/.aws:ro
-      # Mount kubeconfig for kubectl access
-      - ~/.kube:/root/.kube:ro
+      # Mount kubeconfig (writable for aws eks update-kubeconfig)
+      - ~/.kube:/root/.kube
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:54321/api/health"]
