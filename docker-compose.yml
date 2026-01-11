@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  aws-dashboard:
+    image: aws-dashboard:latest
+    ports:
+      - "54321:54321"
+    environment:
+      - AWS_PROFILE=${AWS_PROFILE:-default}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    volumes:
+      # Mount AWS credentials
+      - ~/.aws:/root/.aws:ro
+      # Mount kubeconfig for kubectl access
+      - ~/.kube:/root/.kube:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:54321/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

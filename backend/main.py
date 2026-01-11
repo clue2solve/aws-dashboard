@@ -1,9 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import boto3
 import json
 import subprocess
+import os
 from pathlib import Path
 from typing import Optional, List
 
@@ -1723,6 +1726,22 @@ def switch_context(context: str):
         raise HTTPException(status_code=500, detail="Command timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Serve static frontend files if they exist (for production Docker deployment)
+static_path = Path(__file__).parent / "static"
+if static_path.exists():
+    # Serve static assets
+    app.mount("/assets", StaticFiles(directory=static_path / "assets"), name="assets")
+
+    # Catch-all route for SPA - must be last
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # If it's an API route, let it 404 naturally
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        # Serve index.html for all other routes (SPA routing)
+        return FileResponse(static_path / "index.html")
 
 
 if __name__ == "__main__":
