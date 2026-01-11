@@ -21,13 +21,12 @@ echo "Copying frontend to backend..."
 rm -rf backend/static
 cp -r frontend/dist backend/static
 
-# Build container with Pack
-echo "Building container with Pack CLI..."
-pack build aws-dashboard \
-  --path backend \
-  --builder paketobuildpacks/builder-jammy-base \
-  --env BP_CPYTHON_VERSION=3.12
+# Build container with Docker
+echo "Building container with Docker..."
+docker build -t aws-dashboard:latest .
 
+echo ""
 echo "Build complete!"
 echo ""
-echo "Run with: docker run -p 54321:54321 -v ~/.aws:/root/.aws:ro -v ~/.kube:/root/.kube:ro aws-dashboard"
+echo "Run with: docker-compose up"
+echo "Or: docker run -p 54321:54321 -v ~/.aws:/root/.aws:ro -v ~/.kube:/root/.kube:ro aws-dashboard"

@@ -11,9 +11,20 @@ from pathlib import Path
 from typing import Optional, List
 
 # Load configuration from config.json
-config_path = Path(__file__).parent.parent / "config.json"
-with open(config_path) as f:
-    config = json.load(f)
+# Try multiple paths to support both local dev and Docker
+config_paths = [
+    Path(__file__).parent.parent / "config.json",  # Local dev
+    Path(__file__).parent / "config.json",         # Docker (same dir as main.py)
+    Path("/app/config.json"),                       # Docker absolute
+]
+config = None
+for config_path in config_paths:
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        break
+if config is None:
+    raise FileNotFoundError("config.json not found in any expected location")
 
 BACKEND_PORT = config["ports"]["backend"]
 FRONTEND_PORT = config["ports"]["frontend"]
