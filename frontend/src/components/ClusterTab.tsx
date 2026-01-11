@@ -33,6 +33,7 @@ import {
   ListItemIcon,
   ListItemText,
   Divider,
+  IconButton,
 } from '@mui/material'
 import { motion, AnimatePresence } from 'framer-motion'
 import CloudIcon from '@mui/icons-material/Cloud'
@@ -59,6 +60,16 @@ import FilterListIcon from '@mui/icons-material/FilterList'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import InfoIcon from '@mui/icons-material/Info'
+import CodeIcon from '@mui/icons-material/Code'
+import DeleteIcon from '@mui/icons-material/Delete'
+import ArticleIcon from '@mui/icons-material/Article'
+import HistoryIcon from '@mui/icons-material/History'
+import RestartAltIcon from '@mui/icons-material/RestartAlt'
+import TuneIcon from '@mui/icons-material/Tune'
+import CloseIcon from '@mui/icons-material/Close'
+
+const API_BASE = 'http://localhost:54321/api'
 
 interface EksCluster {
   name: string
@@ -354,6 +365,24 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false)
   const [stopConfirmInput, setStopConfirmInput] = useState('')
   const [clusterToStop, setClusterToStop] = useState('')
+
+  // Resource action state
+  const [selectedResource, setSelectedResource] = useState<any>(null)
+  const [logsModalOpen, setLogsModalOpen] = useState(false)
+  const [logsContent, setLogsContent] = useState('')
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsPrevious, setLogsPrevious] = useState(false)
+  const [describeModalOpen, setDescribeModalOpen] = useState(false)
+  const [describeContent, setDescribeContent] = useState('')
+  const [describeLoading, setDescribeLoading] = useState(false)
+  const [yamlModalOpen, setYamlModalOpen] = useState(false)
+  const [yamlContent, setYamlContent] = useState('')
+  const [yamlLoading, setYamlLoading] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [scaleDialogOpen, setScaleDialogOpen] = useState(false)
+  const [scaleReplicas, setScaleReplicas] = useState(1)
+  const [actionLoading, setActionLoading] = useState(false)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -659,6 +688,259 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
         return <ErrorIcon fontSize="small" color="error" />
       default:
         return null
+    }
+  }
+
+  // ============================================================================
+  // RESOURCE ACTION HANDLERS
+  // ============================================================================
+
+  const handleViewLogs = async (resource: any, previous: boolean = false) => {
+    if (!selectedEksCluster) return
+    setSelectedResource(resource)
+    setLogsPrevious(previous)
+    setLogsModalOpen(true)
+    setLogsLoading(true)
+    setLogsContent('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/pods/${resource.namespace}/${resource.name}/logs?previous=${previous}&tail=500`
+      )
+      const data = await response.json()
+      setLogsContent(data.error || data.logs || 'No logs available')
+    } catch (error) {
+      setLogsContent(`Error fetching logs: ${error}`)
+    } finally {
+      setLogsLoading(false)
+    }
+  }
+
+  const handleDescribe = async (resource: any, resourceType: string) => {
+    if (!selectedEksCluster) return
+    setSelectedResource(resource)
+    setDescribeModalOpen(true)
+    setDescribeLoading(true)
+    setDescribeContent('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/describe`
+      )
+      const data = await response.json()
+      setDescribeContent(data.error || data.describe || 'No description available')
+    } catch (error) {
+      setDescribeContent(`Error fetching description: ${error}`)
+    } finally {
+      setDescribeLoading(false)
+    }
+  }
+
+  const handleViewYaml = async (resource: any, resourceType: string) => {
+    if (!selectedEksCluster) return
+    setSelectedResource(resource)
+    setYamlModalOpen(true)
+    setYamlLoading(true)
+    setYamlContent('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/yaml`
+      )
+      const data = await response.json()
+      setYamlContent(data.error || data.yaml || 'No YAML available')
+    } catch (error) {
+      setYamlContent(`Error fetching YAML: ${error}`)
+    } finally {
+      setYamlLoading(false)
+    }
+  }
+
+  const handleDeleteResource = async () => {
+    if (!selectedEksCluster || !selectedResource) return
+    setDeleteLoading(true)
+
+    try {
+      const resourceType = selectedResourceType === 'pods' ? 'pod' :
+                          selectedResourceType === 'deployments' ? 'deployment' :
+                          selectedResourceType === 'services' ? 'service' :
+                          selectedResourceType === 'configmaps' ? 'configmap' :
+                          selectedResourceType === 'secrets' ? 'secret' :
+                          selectedResourceType === 'statefulsets' ? 'statefulset' :
+                          selectedResourceType === 'daemonsets' ? 'daemonset' :
+                          selectedResourceType === 'jobs' ? 'job' :
+                          selectedResourceType === 'cronjobs' ? 'cronjob' : selectedResourceType
+
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${selectedResource.namespace}/${selectedResource.name}`,
+        { method: 'DELETE' }
+      )
+      const data = await response.json()
+
+      if (response.ok) {
+        setDeleteConfirmOpen(false)
+        fetchResources(selectedEksCluster, selectedResourceType)
+      } else {
+        alert(`Error: ${data.detail || 'Failed to delete resource'}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error}`)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const handleRestartDeployment = async (resource: any) => {
+    if (!selectedEksCluster) return
+    setActionLoading(true)
+
+    try {
+      const resourceType = selectedResourceType === 'deployments' ? 'deployments' :
+                          selectedResourceType === 'statefulsets' ? 'statefulsets' :
+                          selectedResourceType === 'daemonsets' ? 'daemonsets' : 'deployments'
+
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/${resourceType}/${resource.namespace}/${resource.name}/restart`,
+        { method: 'POST' }
+      )
+      const data = await response.json()
+
+      if (response.ok) {
+        alert(`Restart initiated: ${data.message}`)
+        fetchResources(selectedEksCluster, selectedResourceType)
+      } else {
+        alert(`Error: ${data.detail || 'Failed to restart'}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error}`)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleScaleDeployment = async () => {
+    if (!selectedEksCluster || !selectedResource) return
+    setActionLoading(true)
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/deployments/${selectedResource.namespace}/${selectedResource.name}/scale?replicas=${scaleReplicas}`,
+        { method: 'POST' }
+      )
+      const data = await response.json()
+
+      if (response.ok) {
+        setScaleDialogOpen(false)
+        fetchResources(selectedEksCluster, selectedResourceType)
+      } else {
+        alert(`Error: ${data.detail || 'Failed to scale'}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error}`)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleTriggerCronJob = async (resource: any) => {
+    if (!selectedEksCluster) return
+    setActionLoading(true)
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/clusters/${selectedEksCluster}/cronjobs/${resource.namespace}/${resource.name}/trigger`,
+        { method: 'POST' }
+      )
+      const data = await response.json()
+
+      if (response.ok) {
+        alert(`CronJob triggered! Created job: ${data.jobName}`)
+      } else {
+        alert(`Error: ${data.detail || 'Failed to trigger CronJob'}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error}`)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const getResourceActions = (resource: any): React.ReactNode => {
+    const resourceType = selectedResourceType
+
+    const commonActions = (
+      <>
+        <Tooltip title="Describe (d)">
+          <IconButton size="small" onClick={() => handleDescribe(resource, resourceType.slice(0, -1))}>
+            <InfoIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="YAML (y)">
+          <IconButton size="small" onClick={() => handleViewYaml(resource, resourceType.slice(0, -1))}>
+            <CodeIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Delete (Ctrl+D)">
+          <IconButton size="small" color="error" onClick={() => { setSelectedResource(resource); setDeleteConfirmOpen(true); }}>
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </>
+    )
+
+    switch (resourceType) {
+      case 'pods':
+        return (
+          <>
+            <Tooltip title="Logs (l)">
+              <IconButton size="small" onClick={() => handleViewLogs(resource, false)}>
+                <ArticleIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Previous Logs (L)">
+              <IconButton size="small" onClick={() => handleViewLogs(resource, true)}>
+                <HistoryIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {commonActions}
+          </>
+        )
+
+      case 'deployments':
+      case 'statefulsets':
+      case 'daemonsets':
+        return (
+          <>
+            <Tooltip title="Restart (r)">
+              <IconButton size="small" onClick={() => handleRestartDeployment(resource)} disabled={actionLoading}>
+                <RestartAltIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {resourceType === 'deployments' && (
+              <Tooltip title="Scale">
+                <IconButton size="small" onClick={() => { setSelectedResource(resource); setScaleReplicas(1); setScaleDialogOpen(true); }}>
+                  <TuneIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {commonActions}
+          </>
+        )
+
+      case 'cronjobs':
+        return (
+          <>
+            <Tooltip title="Trigger Now">
+              <IconButton size="small" onClick={() => handleTriggerCronJob(resource)} disabled={actionLoading}>
+                <PlayArrowIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {commonActions}
+          </>
+        )
+
+      default:
+        return commonActions
     }
   }
 
@@ -1208,6 +1490,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                               {col.label}
                             </TableCell>
                           ))}
+                          <TableCell sx={{ fontWeight: 600, width: 180 }}>Actions</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -1233,6 +1516,11 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                                 )}
                               </TableCell>
                             ))}
+                            <TableCell>
+                              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                {getResourceActions(row)}
+                              </Box>
+                            </TableCell>
                           </TableRow>
                         ))}
                         {filteredResources.length === 0 && (
@@ -1598,6 +1886,183 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
               onClick={handleScaleDown}
             >
               Stop Cluster
+            </Button>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Logs Modal */}
+      <Dialog open={logsModalOpen} onClose={() => setLogsModalOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ArticleIcon color="primary" />
+            {logsPrevious ? 'Previous Logs' : 'Logs'}: {selectedResource?.name}
+          </Box>
+          <IconButton onClick={() => setLogsModalOpen(false)} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {logsLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e1e1e',
+                color: '#d4d4d4',
+                p: 2,
+                borderRadius: 1,
+                overflow: 'auto',
+                maxHeight: '60vh',
+                fontSize: '0.8rem',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {logsContent || 'No logs available'}
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Describe Modal */}
+      <Dialog open={describeModalOpen} onClose={() => setDescribeModalOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <InfoIcon color="primary" />
+            Describe: {selectedResource?.name}
+          </Box>
+          <IconButton onClick={() => setDescribeModalOpen(false)} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {describeLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e1e1e',
+                color: '#d4d4d4',
+                p: 2,
+                borderRadius: 1,
+                overflow: 'auto',
+                maxHeight: '60vh',
+                fontSize: '0.8rem',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {describeContent || 'No description available'}
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* YAML Modal */}
+      <Dialog open={yamlModalOpen} onClose={() => setYamlModalOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CodeIcon color="primary" />
+            YAML: {selectedResource?.name}
+          </Box>
+          <Box>
+            <Tooltip title="Copy YAML">
+              <IconButton onClick={() => navigator.clipboard.writeText(yamlContent)} size="small">
+                <ContentCopyIcon />
+              </IconButton>
+            </Tooltip>
+            <IconButton onClick={() => setYamlModalOpen(false)} size="small">
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {yamlLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e1e1e',
+                color: '#d4d4d4',
+                p: 2,
+                borderRadius: 1,
+                overflow: 'auto',
+                maxHeight: '60vh',
+                fontSize: '0.8rem',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {yamlContent || 'No YAML available'}
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'error.main' }}>
+          <WarningIcon color="error" />
+          Delete {selectedResourceType?.slice(0, -1)}
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Are you sure you want to delete <strong>{selectedResource?.name}</strong> in namespace <strong>{selectedResource?.namespace}</strong>?
+          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            This action cannot be undone.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 2, justifyContent: 'flex-end' }}>
+            <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={handleDeleteResource}
+              disabled={deleteLoading}
+            >
+              {deleteLoading ? 'Deleting...' : 'Delete'}
+            </Button>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Scale Dialog */}
+      <Dialog open={scaleDialogOpen} onClose={() => setScaleDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Scale Deployment</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Scale <strong>{selectedResource?.name}</strong> to desired replicas
+          </Typography>
+          <TextField
+            fullWidth
+            type="number"
+            label="Replicas"
+            value={scaleReplicas}
+            onChange={(e) => setScaleReplicas(Math.max(0, parseInt(e.target.value) || 0))}
+            inputProps={{ min: 0 }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, mt: 2, justifyContent: 'flex-end' }}>
+            <Button onClick={() => setScaleDialogOpen(false)}>Cancel</Button>
+            <Button
+              variant="contained"
+              onClick={handleScaleDeployment}
+              disabled={actionLoading}
+            >
+              {actionLoading ? 'Scaling...' : 'Scale'}
             </Button>
           </Box>
         </DialogContent>

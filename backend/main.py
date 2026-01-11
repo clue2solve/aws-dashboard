@@ -1739,6 +1739,342 @@ def switch_context(context: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================================
+# K9S-STYLE RESOURCE ACTIONS
+# ============================================================================
+
+@app.get("/api/clusters/{cluster}/pods/{namespace}/{name}/logs")
+def get_pod_logs(cluster: str, namespace: str, name: str, container: Optional[str] = None, previous: bool = False, tail: int = 500):
+    """Get logs from a pod."""
+    context = get_eks_context(cluster)
+    cmd = ["logs", name, "-n", namespace, f"--tail={tail}"]
+    if container:
+        cmd.extend(["-c", container])
+    if previous:
+        cmd.append("--previous")
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return {"error": result.stderr, "logs": ""}
+        return {"logs": result.stdout, "error": None}
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out", "logs": ""}
+    except Exception as e:
+        return {"error": str(e), "logs": ""}
+
+
+@app.get("/api/clusters/{cluster}/resources/{resource_type}/{namespace}/{name}/describe")
+def describe_resource(cluster: str, resource_type: str, namespace: str, name: str):
+    """Describe a Kubernetes resource."""
+    context = get_eks_context(cluster)
+    cmd = ["describe", resource_type, name, "-n", namespace]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return {"error": result.stderr, "describe": ""}
+        return {"describe": result.stdout, "error": None}
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out", "describe": ""}
+    except Exception as e:
+        return {"error": str(e), "describe": ""}
+
+
+@app.get("/api/clusters/{cluster}/resources/{resource_type}/{namespace}/{name}/yaml")
+def get_resource_yaml(cluster: str, resource_type: str, namespace: str, name: str):
+    """Get YAML definition of a Kubernetes resource."""
+    context = get_eks_context(cluster)
+    cmd = ["get", resource_type, name, "-n", namespace, "-o", "yaml"]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return {"error": result.stderr, "yaml": ""}
+        return {"yaml": result.stdout, "error": None}
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out", "yaml": ""}
+    except Exception as e:
+        return {"error": str(e), "yaml": ""}
+
+
+@app.delete("/api/clusters/{cluster}/resources/{resource_type}/{namespace}/{name}")
+def delete_resource(cluster: str, resource_type: str, namespace: str, name: str, force: bool = False):
+    """Delete a Kubernetes resource."""
+    context = get_eks_context(cluster)
+    cmd = ["delete", resource_type, name, "-n", namespace]
+    if force:
+        cmd.extend(["--force", "--grace-period=0"])
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/deployments/{namespace}/{name}/restart")
+def restart_deployment(cluster: str, namespace: str, name: str):
+    """Restart a deployment (rollout restart)."""
+    context = get_eks_context(cluster)
+    cmd = ["rollout", "restart", "deployment", name, "-n", namespace]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/deployments/{namespace}/{name}/scale")
+def scale_deployment(cluster: str, namespace: str, name: str, replicas: int):
+    """Scale a deployment."""
+    context = get_eks_context(cluster)
+    cmd = ["scale", "deployment", name, "-n", namespace, f"--replicas={replicas}"]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/statefulsets/{namespace}/{name}/restart")
+def restart_statefulset(cluster: str, namespace: str, name: str):
+    """Restart a statefulset (rollout restart)."""
+    context = get_eks_context(cluster)
+    cmd = ["rollout", "restart", "statefulset", name, "-n", namespace]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/daemonsets/{namespace}/{name}/restart")
+def restart_daemonset(cluster: str, namespace: str, name: str):
+    """Restart a daemonset (rollout restart)."""
+    context = get_eks_context(cluster)
+    cmd = ["rollout", "restart", "daemonset", name, "-n", namespace]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/cronjobs/{namespace}/{name}/trigger")
+def trigger_cronjob(cluster: str, namespace: str, name: str):
+    """Trigger a CronJob manually (create a Job from it)."""
+    context = get_eks_context(cluster)
+    job_name = f"{name}-manual-{int(__import__('time').time())}"
+    cmd = ["create", "job", job_name, f"--from=cronjob/{name}", "-n", namespace]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout, "jobName": job_name}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/nodes/{name}/cordon")
+def cordon_node(cluster: str, name: str):
+    """Cordon a node (mark as unschedulable)."""
+    context = get_eks_context(cluster)
+    cmd = ["cordon", name]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/nodes/{name}/uncordon")
+def uncordon_node(cluster: str, name: str):
+    """Uncordon a node (mark as schedulable)."""
+    context = get_eks_context(cluster)
+    cmd = ["uncordon", name]
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clusters/{cluster}/nodes/{name}/drain")
+def drain_node(cluster: str, name: str, force: bool = False, ignore_daemonsets: bool = True):
+    """Drain a node (evict all pods)."""
+    context = get_eks_context(cluster)
+    cmd = ["drain", name, "--delete-emptydir-data"]
+    if force:
+        cmd.append("--force")
+    if ignore_daemonsets:
+        cmd.append("--ignore-daemonsets")
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", context] + cmd,
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail=result.stderr)
+        return {"success": True, "message": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Command timed out - drain may still be in progress")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/clusters/{cluster}/pods/{namespace}/{name}/containers")
+def get_pod_containers(cluster: str, namespace: str, name: str):
+    """Get list of containers in a pod."""
+    context = get_eks_context(cluster)
+    data = run_kubectl(["get", "pod", name, "-n", namespace], context)
+
+    if "error" in data:
+        return {"containers": [], "error": data["error"]}
+
+    containers = []
+    spec = data.get("spec", {})
+
+    # Regular containers
+    for c in spec.get("containers", []):
+        containers.append({"name": c.get("name"), "type": "container"})
+
+    # Init containers
+    for c in spec.get("initContainers", []):
+        containers.append({"name": c.get("name"), "type": "init"})
+
+    return {"containers": containers, "error": None}
+
+
+@app.get("/api/clusters/{cluster}/events")
+def get_cluster_events(cluster: str, namespace: Optional[str] = None, field_selector: Optional[str] = None, limit: int = 100):
+    """Get cluster events, optionally filtered by namespace or field selector."""
+    context = get_eks_context(cluster)
+    cmd = ["get", "events", "--sort-by=.lastTimestamp", f"--limit={limit}"]
+
+    if namespace and namespace != "__all__":
+        cmd.extend(["-n", namespace])
+    else:
+        cmd.append("-A")
+
+    if field_selector:
+        cmd.extend(["--field-selector", field_selector])
+
+    data = run_kubectl(cmd, context)
+
+    if "error" in data:
+        return {"events": [], "error": data["error"]}
+
+    events = []
+    for item in data.get("items", []):
+        metadata = item.get("metadata", {})
+        involved = item.get("involvedObject", {})
+        events.append({
+            "namespace": metadata.get("namespace", ""),
+            "name": metadata.get("name", ""),
+            "type": item.get("type", ""),
+            "reason": item.get("reason", ""),
+            "message": item.get("message", ""),
+            "source": item.get("source", {}).get("component", ""),
+            "involvedObject": f"{involved.get('kind', '')}/{involved.get('name', '')}",
+            "count": item.get("count", 1),
+            "firstTimestamp": item.get("firstTimestamp", ""),
+            "lastTimestamp": item.get("lastTimestamp", ""),
+            "age": calculate_age(metadata.get("creationTimestamp", "")),
+        })
+
+    return {"events": events, "error": None}
+
+
 # Serve static frontend files if they exist (for production Docker deployment)
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
