@@ -44,7 +44,7 @@ const serviceIcons: Record<string, string> = {
 const navigableServices: Record<string, number> = {
   'EC2': 1,       // Compute tab
   'EC2 Other': 1, // Compute tab
-  'EKS': 3,       // Clusters tab (Cost tab inserted at index 2)
+  'EKS': 4,       // Clusters tab (Cost at 2, Agents at 3, Clusters at 4)
 }
 
 const container = {
