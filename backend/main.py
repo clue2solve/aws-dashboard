@@ -14,6 +14,15 @@ import time
 from pathlib import Path
 from typing import Optional, List, Any, Dict, Tuple
 
+from aws_rates import (
+    ABSOLUTE_FALLBACK_HR,
+    EC2_MONTHLY_RATES_USD,
+    EKS_CONTROL_PLANE_HOURLY,
+    FALLBACK_PER_VCPU_HR,
+    MONTHLY_HOURS,
+    SPOT_MULTIPLIER,
+)
+
 # Load configuration from config.json
 # Try multiple paths to support both local dev and Docker
 config_paths = [
@@ -601,26 +610,197 @@ def get_resources():
 
 
 # ============================================================================
+# EC2 HELPERS — cluster membership, use hints, monthly cost estimate
+# ============================================================================
+
+# Cache for describe_instance_types vCPU lookups (per process).
+_VCPU_CACHE: Dict[str, int] = {}
+
+
+def _detect_parent_cluster(tags: Dict[str, str]) -> Tuple[Optional[str], Optional[str], List[str]]:
+    """
+    Inspect instance tags for EKS/self-managed cluster membership.
+
+    Detection precedence:
+      1. `aws:eks:cluster-name`  (authoritative — managed nodegroup)
+      2. `eks:cluster-name`      (older managed convention)
+      3. `kubernetes.io/cluster/<X>` == "owned"  (self-managed or older kOps)
+
+    Returns:
+        (parent_cluster, node_role_hint, conflicts)
+        - parent_cluster: cluster name, or None if no membership tags
+        - node_role_hint: `eks:nodegroup-name` value if present; "self-managed"
+          if only pattern (3) matched; None otherwise
+        - conflicts: list of distinct cluster names seen across all matched
+          patterns (empty if consistent). The UI can surface this without
+          the endpoint failing.
+    """
+    if not tags:
+        return None, None, []
+
+    candidates: List[str] = []
+    # Pattern (1) — managed nodegroup (authoritative)
+    managed = tags.get("aws:eks:cluster-name")
+    if managed:
+        candidates.append(managed)
+    # Pattern (2) — older managed convention
+    legacy_managed = tags.get("eks:cluster-name")
+    if legacy_managed and legacy_managed not in candidates:
+        candidates.append(legacy_managed)
+    # Pattern (3) — kubernetes.io/cluster/<X>=owned
+    self_managed_names: List[str] = []
+    for key, value in tags.items():
+        if key.startswith("kubernetes.io/cluster/") and value == "owned":
+            name = key[len("kubernetes.io/cluster/"):]
+            if name:
+                self_managed_names.append(name)
+    for name in self_managed_names:
+        if name not in candidates:
+            candidates.append(name)
+
+    if not candidates:
+        return None, None, []
+
+    parent_cluster = candidates[0]
+    node_role_hint = tags.get("eks:nodegroup-name")
+    if not node_role_hint and managed is None and legacy_managed is None:
+        # Only pattern (3) matched — self-managed
+        node_role_hint = "self-managed"
+
+    conflicts = candidates if len(candidates) > 1 else []
+    return parent_cluster, node_role_hint, conflicts
+
+
+def _extract_use_hints(tags: Dict[str, str], iam_instance_profile_arn: Optional[str]) -> Dict[str, Optional[str]]:
+    """
+    Distill best-guess identification from tags + IAM profile for the UI.
+
+    Populated for ALL instances (cluster nodes get name/env/owner chips too;
+    orphans lean on env/owner/c2a_project/iam_profile).
+
+    c2a tag keys support two conventions: dash (`c2a-account`) and colon
+    (`c2a:account`). When both are present, prefer the colon form (newer
+    per platform memory).
+    """
+    if not tags:
+        tags = {}
+
+    def _first(*keys: str) -> Optional[str]:
+        for k in keys:
+            v = tags.get(k)
+            if v:
+                return v
+        return None
+
+    iam_profile: Optional[str] = None
+    if iam_instance_profile_arn:
+        # Arn shape: arn:aws:iam::<acct>:instance-profile/<NAME>
+        iam_profile = iam_instance_profile_arn.rsplit("/", 1)[-1] or None
+
+    return {
+        "name": tags.get("Name"),
+        "environment": _first("Environment", "environment", "env", "Env"),
+        "owner": _first("Owner", "owner"),
+        # Colon form preferred (newer convention)
+        "c2a_account": _first("c2a:account", "c2a-account"),
+        "c2a_project": _first("c2a:project", "c2a-project"),
+        "iam_profile": iam_profile,
+    }
+
+
+def _instance_type_vcpu(instance_type: str) -> Optional[int]:
+    """Return vCPU count for an instance type, cached per process. None on failure."""
+    if instance_type in _VCPU_CACHE:
+        return _VCPU_CACHE[instance_type]
+    try:
+        ec2 = boto3.client("ec2")
+        resp = ec2.describe_instance_types(InstanceTypes=[instance_type])
+        infos = resp.get("InstanceTypes") or []
+        if not infos:
+            return None
+        vcpu = infos[0].get("VCpuInfo", {}).get("DefaultVCpus")
+        if isinstance(vcpu, int) and vcpu > 0:
+            _VCPU_CACHE[instance_type] = vcpu
+            return vcpu
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_monthly(
+    instance_type: Optional[str],
+    state: str = "running",
+    lifecycle: Optional[str] = None,
+) -> Tuple[float, float, bool]:
+    """
+    Estimate hourly + monthly USD cost for an instance.
+
+    Returns:
+        (hourly, monthly, estimated)
+        - hourly: rate applied (post spot-multiplier if lifecycle == 'spot')
+        - monthly: hourly * MONTHLY_HOURS, or 0.0 if state != 'running'
+        - estimated: True if a fallback path was used (unknown type, spot,
+          or absolute floor)
+    """
+    if not instance_type:
+        return 0.0, 0.0, True
+
+    estimated = False
+    base_hourly = EC2_MONTHLY_RATES_USD.get(instance_type)
+
+    if base_hourly is None:
+        estimated = True
+        vcpu = _instance_type_vcpu(instance_type)
+        if vcpu:
+            base_hourly = vcpu * FALLBACK_PER_VCPU_HR
+        else:
+            base_hourly = ABSOLUTE_FALLBACK_HR
+
+    hourly = base_hourly
+    if lifecycle == "spot":
+        hourly = base_hourly * SPOT_MULTIPLIER
+        estimated = True
+
+    # Stopped/terminated instances contribute $0/mo to steady-state cost.
+    monthly = hourly * MONTHLY_HOURS if state == "running" else 0.0
+    return round(hourly, 6), round(monthly, 2), estimated
+
+
+# ============================================================================
 # EC2 ENDPOINTS
 # ============================================================================
 
 @app.get("/api/ec2/instances")
-def get_ec2_instances():
-    """Get all EC2 instances with details."""
+def get_ec2_instances(
+    group_by: Optional[str] = Query(None, description="Set to 'cluster' for pre-bucketed response"),
+):
+    """
+    Get all EC2 instances with details.
+
+    Enriches each instance with:
+      - parent_cluster:   parent EKS cluster (if any) detected from Tags
+      - node_role_hint:   nodegroup name (managed) or "self-managed"
+      - use_hints:        {name, environment, owner, c2a_account, c2a_project, iam_profile}
+      - monthly_estimate: {hourly, monthly, estimated}
+      - parent_cluster_conflict: list of cluster names if the instance carries
+        conflicting membership tags (rare — a warning, not an error)
+
+    When `group_by=cluster` is passed, response uses the {groups: [...]}
+    shape (cluster buckets + an __orphans__ bucket) so the ComputeTab can
+    render section headers without re-grouping client-side.
+    """
     clients = get_boto_clients()
 
     try:
         response = clients["ec2"].describe_instances()
-        instances = []
+        instances: List[Dict[str, Any]] = []
+        cluster_summary: Dict[str, Dict[str, Any]] = {}
+        orphan_count = 0
 
         for reservation in response.get("Reservations", []):
             for instance in reservation.get("Instances", []):
-                # Get instance name from tags
-                name = ""
-                for tag in instance.get("Tags", []):
-                    if tag["Key"] == "Name":
-                        name = tag["Value"]
-                        break
+                tags_map: Dict[str, str] = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                name = tags_map.get("Name", "")
 
                 # Calculate uptime
                 launch_time = instance.get("LaunchTime")
@@ -636,26 +816,87 @@ def get_ec2_instances():
                     else:
                         uptime = f"{hours}h"
 
-                instances.append({
+                state = instance.get("State", {}).get("Name", "unknown")
+                instance_type = instance.get("InstanceType")
+                lifecycle = instance.get("InstanceLifecycle")  # 'spot' | 'scheduled' | None
+                iam_arn = (instance.get("IamInstanceProfile") or {}).get("Arn")
+
+                parent_cluster, node_role_hint, conflicts = _detect_parent_cluster(tags_map)
+                use_hints = _extract_use_hints(tags_map, iam_arn)
+                hourly, monthly, estimated = _estimate_monthly(instance_type, state, lifecycle)
+
+                item: Dict[str, Any] = {
                     "instanceId": instance.get("InstanceId"),
                     "name": name,
-                    "state": instance.get("State", {}).get("Name", "unknown"),
-                    "instanceType": instance.get("InstanceType"),
+                    "state": state,
+                    "instanceType": instance_type,
                     "privateIp": instance.get("PrivateIpAddress"),
                     "publicIp": instance.get("PublicIpAddress"),
-                    "launchTime": str(instance.get("LaunchTime")) if instance.get("LaunchTime") else None,
+                    "launchTime": str(launch_time) if launch_time else None,
                     "uptime": uptime,
                     "availabilityZone": instance.get("Placement", {}).get("AvailabilityZone"),
                     "vpcId": instance.get("VpcId"),
                     "subnetId": instance.get("SubnetId"),
                     "platform": instance.get("PlatformDetails", "Linux/UNIX"),
                     "architecture": instance.get("Architecture"),
-                    "tags": {t["Key"]: t["Value"] for t in instance.get("Tags", [])},
-                })
+                    "tags": tags_map,
+                    "parent_cluster": parent_cluster,
+                    "node_role_hint": node_role_hint,
+                    "use_hints": use_hints,
+                    "lifecycle": lifecycle,  # 'spot' | 'scheduled' | None
+                    "monthly_estimate": {
+                        "hourly": hourly,
+                        "monthly": monthly,
+                        "estimated": estimated,
+                    },
+                }
+                if conflicts:
+                    item["parent_cluster_conflict"] = conflicts
 
-        # Sort by name
-        instances.sort(key=lambda x: (x["state"] != "running", x["name"].lower()))
-        return {"instances": instances}
+                if parent_cluster:
+                    summary = cluster_summary.setdefault(
+                        parent_cluster, {"nodeCount": 0, "instanceTypes": {}}
+                    )
+                    summary["nodeCount"] += 1
+                    if instance_type:
+                        summary["instanceTypes"][instance_type] = (
+                            summary["instanceTypes"].get(instance_type, 0) + 1
+                        )
+                else:
+                    orphan_count += 1
+
+                instances.append(item)
+
+        # Sort by name (running first)
+        instances.sort(key=lambda x: (x["state"] != "running", (x["name"] or "").lower()))
+
+        if group_by == "cluster":
+            # Two buckets: one per cluster + __orphans__
+            groups_by_key: Dict[str, Dict[str, Any]] = {}
+            orphans: List[Dict[str, Any]] = []
+            for inst in instances:
+                pc = inst.get("parent_cluster")
+                if pc:
+                    bucket = groups_by_key.setdefault(
+                        pc,
+                        {"key": pc, "kind": "cluster", "clusterName": pc, "instances": []},
+                    )
+                    bucket["instances"].append(inst)
+                else:
+                    orphans.append(inst)
+            groups: List[Dict[str, Any]] = sorted(groups_by_key.values(), key=lambda g: g["clusterName"])
+            groups.append({"key": "__orphans__", "kind": "orphans", "instances": orphans})
+            return {
+                "groups": groups,
+                "clusterSummary": cluster_summary,
+                "orphanCount": orphan_count,
+            }
+
+        return {
+            "instances": instances,
+            "clusterSummary": cluster_summary,
+            "orphanCount": orphan_count,
+        }
     except Exception as e:
         return {"instances": [], "error": str(e)}
 
@@ -826,6 +1067,83 @@ def get_ec2_summary():
         return summary
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/ec2/orphans")
+def get_ec2_orphans(
+    include_stopped: bool = Query(False, description="Include stopped instances"),
+):
+    """
+    Instances NOT part of any EKS/self-managed cluster.
+
+    Same instance shape as /api/ec2/instances. Pre-filtered so the
+    ComputeTab \"Not in a cluster\" section can lazy-load if the operator has
+    hundreds of nodes. `include_stopped` defaults to False — stopped orphans
+    are rarely interesting for cost identification.
+    """
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].describe_instances()
+        orphans: List[Dict[str, Any]] = []
+
+        for reservation in response.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags_map: Dict[str, str] = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                parent_cluster, _node_role_hint, _conflicts = _detect_parent_cluster(tags_map)
+                if parent_cluster is not None:
+                    continue
+
+                state = instance.get("State", {}).get("Name", "unknown")
+                if state != "running" and not include_stopped:
+                    continue
+
+                launch_time = instance.get("LaunchTime")
+                uptime = ""
+                if launch_time:
+                    from datetime import datetime, timezone
+                    now = datetime.now(timezone.utc)
+                    delta = now - launch_time
+                    days = delta.days
+                    hours = delta.seconds // 3600
+                    uptime = f"{days}d {hours}h" if days > 0 else f"{hours}h"
+
+                instance_type = instance.get("InstanceType")
+                lifecycle = instance.get("InstanceLifecycle")
+                iam_arn = (instance.get("IamInstanceProfile") or {}).get("Arn")
+                use_hints = _extract_use_hints(tags_map, iam_arn)
+                hourly, monthly, estimated = _estimate_monthly(instance_type, state, lifecycle)
+
+                orphans.append({
+                    "instanceId": instance.get("InstanceId"),
+                    "name": tags_map.get("Name", ""),
+                    "state": state,
+                    "instanceType": instance_type,
+                    "privateIp": instance.get("PrivateIpAddress"),
+                    "publicIp": instance.get("PublicIpAddress"),
+                    "launchTime": str(launch_time) if launch_time else None,
+                    "uptime": uptime,
+                    "availabilityZone": instance.get("Placement", {}).get("AvailabilityZone"),
+                    "vpcId": instance.get("VpcId"),
+                    "subnetId": instance.get("SubnetId"),
+                    "platform": instance.get("PlatformDetails", "Linux/UNIX"),
+                    "architecture": instance.get("Architecture"),
+                    "tags": tags_map,
+                    "parent_cluster": None,
+                    "node_role_hint": None,
+                    "use_hints": use_hints,
+                    "lifecycle": lifecycle,
+                    "monthly_estimate": {
+                        "hourly": hourly,
+                        "monthly": monthly,
+                        "estimated": estimated,
+                    },
+                })
+
+        orphans.sort(key=lambda x: (x["state"] != "running", (x["name"] or "").lower()))
+        return {"instances": orphans, "count": len(orphans)}
+    except Exception as e:
+        return {"instances": [], "count": 0, "error": str(e)}
 
 
 @app.get("/api/users")
@@ -1283,6 +1601,174 @@ def get_eks_addons(cluster_name: str):
         return {"addons": [], "error": str(e)}
 
 
+def _rollup_cluster_cost(cluster_name: str, cluster_status: Optional[str]) -> Dict[str, Any]:
+    """
+    Compute the honest monthly cost for an EKS cluster:
+      control_plane_monthly + node_monthly
+
+    Node cost uses the static us-west-2 on-demand rate table
+    (aws_rates.EC2_MONTHLY_RATES_USD) × 730h/mo, with a per-vCPU fallback and
+    a 0.30× spot multiplier. Stopped instances contribute $0. Rows with
+    an unknown instanceType or a spot lifecycle are flagged estimated=true.
+
+    Node discovery: describe_instances filtered by
+    `tag:kubernetes.io/cluster/<name>=owned` OR `tag:aws:eks:cluster-name=<name>`.
+    Rather than issue two calls we do one filter on the kubernetes.io tag
+    (present on both managed + self-managed nodes) and then re-check the
+    managed tag in-Python so nothing slips through.
+    """
+    ec2 = boto3.client("ec2")
+
+    # Membership filter — the kubernetes.io/cluster/<X>=owned tag is present
+    # on both managed and self-managed EKS nodes. Managed nodes ALSO carry
+    # aws:eks:cluster-name, so we OR the two filters via two calls only when
+    # needed. Start with the k8s.io tag which covers ~everything.
+    running_types: Dict[str, Dict[str, Any]] = {}
+    running_count = 0
+    total_count = 0
+    seen_instance_ids: set = set()
+
+    def _consume(reservations: List[Dict[str, Any]]) -> None:
+        nonlocal running_count, total_count
+        for reservation in reservations:
+            for instance in reservation.get("Instances", []):
+                iid = instance.get("InstanceId")
+                if not iid or iid in seen_instance_ids:
+                    continue
+                seen_instance_ids.add(iid)
+                state = instance.get("State", {}).get("Name", "unknown")
+                if state == "terminated":
+                    continue
+                total_count += 1
+                instance_type = instance.get("InstanceType") or "unknown"
+                lifecycle = instance.get("InstanceLifecycle")
+                capacity_type = "SPOT" if lifecycle == "spot" else "ON_DEMAND"
+                key = (instance_type, capacity_type)
+                bucket = running_types.setdefault(
+                    key,
+                    {
+                        "instanceType": instance_type,
+                        "capacityType": capacity_type,
+                        "count": 0,
+                        "runningCount": 0,
+                    },
+                )
+                bucket["count"] += 1
+                if state == "running":
+                    bucket["runningCount"] += 1
+                    running_count += 1
+
+    try:
+        resp = ec2.describe_instances(
+            Filters=[
+                {"Name": f"tag:kubernetes.io/cluster/{cluster_name}", "Values": ["owned"]}
+            ]
+        )
+        _consume(resp.get("Reservations", []))
+    except Exception:
+        pass
+
+    try:
+        resp2 = ec2.describe_instances(
+            Filters=[
+                {"Name": "tag:aws:eks:cluster-name", "Values": [cluster_name]}
+            ]
+        )
+        _consume(resp2.get("Reservations", []))
+    except Exception:
+        pass
+
+    # Materialize per-type rows using the running count for monthly math.
+    node_types: List[Dict[str, Any]] = []
+    node_monthly_total = 0.0
+    any_estimated = False
+    for _key, bucket in running_types.items():
+        instance_type = bucket["instanceType"]
+        capacity_type = bucket["capacityType"]
+        running = bucket["runningCount"]
+        lifecycle = "spot" if capacity_type == "SPOT" else None
+        # Use "running" so the fallback returns non-zero hourly, then multiply by running count.
+        hourly, monthly_per_instance, estimated = _estimate_monthly(instance_type, "running", lifecycle)
+        row_monthly = round(monthly_per_instance * running, 2)
+        node_monthly_total += row_monthly
+        if estimated:
+            any_estimated = True
+        node_types.append({
+            "instanceType": instance_type,
+            "count": bucket["count"],
+            "runningCount": running,
+            "hourly": hourly,
+            "monthly": row_monthly,
+            "capacityType": capacity_type,
+            "estimated": estimated,
+        })
+
+    node_types.sort(key=lambda r: (-r["monthly"], r["instanceType"]))
+
+    # Control plane fee — $0.10/hr × 730h unless the cluster isn't billable.
+    non_billable = (cluster_status or "").upper() in {"CREATING", "DELETING", "FAILED"}
+    control_plane_monthly = 0.0 if non_billable else round(EKS_CONTROL_PLANE_HOURLY * MONTHLY_HOURS, 2)
+
+    total_monthly = round(control_plane_monthly + node_monthly_total, 2)
+
+    from datetime import datetime, timezone
+    return {
+        "clusterName": cluster_name,
+        "control_plane_monthly": control_plane_monthly,
+        "node_monthly": round(node_monthly_total, 2),
+        "total_monthly": total_monthly,
+        "node_count": total_count,
+        "running_node_count": running_count,
+        "node_types": node_types,
+        "estimated": any_estimated,
+        "currency": "USD",
+        "asOf": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+
+
+@app.get("/api/eks/clusters/{cluster_name}/cost")
+def get_eks_cluster_cost_rollup(cluster_name: str):
+    """
+    Honest monthly rollup for a single EKS cluster: control plane + nodes.
+
+    Distinct from /api/eks/clusters/{cluster_name}/costs (with the trailing
+    `s`) which returns 30d/7d/1d Cost Explorer numbers for the control plane
+    only. This endpoint is the transparency rollup the ClusterTab needs to
+    show the operator what the cluster ACTUALLY costs each month.
+
+    Node cost is estimated from a static on-demand rate table (see
+    aws_rates.py) — actual billing may differ due to Savings Plans,
+    Reserved Instances, or spot price float. The `estimated` flag is true
+    if any row used a fallback.
+    """
+    clients = get_boto_clients()
+
+    # Look up cluster status for control-plane-billable check. Not fatal if
+    # this fails — we'll assume billable and let the rollup proceed.
+    cluster_status: Optional[str] = None
+    try:
+        details = clients["eks"].describe_cluster(name=cluster_name)
+        cluster_status = details.get("cluster", {}).get("status")
+    except Exception:
+        cluster_status = None
+
+    try:
+        return _rollup_cluster_cost(cluster_name, cluster_status)
+    except Exception as e:
+        return {
+            "clusterName": cluster_name,
+            "control_plane_monthly": 0.0,
+            "node_monthly": 0.0,
+            "total_monthly": 0.0,
+            "node_count": 0,
+            "running_node_count": 0,
+            "node_types": [],
+            "estimated": True,
+            "currency": "USD",
+            "error": str(e),
+        }
+
+
 @app.get("/api/eks/clusters/{cluster_name}/costs")
 def get_eks_cluster_costs(cluster_name: str):
     """Get cost breakdown for an EKS cluster (30 days, 7 days, 1 day)."""
@@ -1368,15 +1854,40 @@ def get_eks_cluster_costs(cluster_name: str):
 
 
 @app.get("/api/eks/costs-summary")
-def get_all_eks_costs():
-    """Get cost summary for all EKS clusters."""
+def get_all_eks_costs(
+    withNodes: bool = Query(True, description="Include node EC2 cost rollup per cluster"),
+):
+    """
+    Cost summary for all EKS clusters.
+
+    Backward-compatible: last30Days/last7Days/lastDay are still populated for
+    each cluster from Cost Explorer (control-plane spend attributed to the
+    EKS service). When `withNodes=true` (default), each cluster also gets
+    controlPlaneMonthly / nodeMonthly / totalMonthly plus a top-level
+    grandTotalMonthly — the honest number the operator wants to see.
+
+    Node cost is computed via a static us-west-2 on-demand rate table
+    × 730h/mo × running instance count. We make ONE describe_instances call
+    (no filter) and partition by cluster in-Python so we don't pay N calls
+    when there are many clusters.
+    """
     clients = get_boto_clients()
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     try:
         # Get all cluster names
         clusters_response = clients["eks"].list_clusters()
         cluster_names = clusters_response.get("clusters", [])
+
+        # Get cluster statuses so we don't attribute a $73/mo control plane fee
+        # to a CREATING/DELETING/FAILED cluster.
+        cluster_statuses: Dict[str, str] = {}
+        for name in cluster_names:
+            try:
+                details = clients["eks"].describe_cluster(name=name)
+                cluster_statuses[name] = details.get("cluster", {}).get("status", "")
+            except Exception:
+                cluster_statuses[name] = ""
 
         # Get total EKS costs
         end_date = datetime.now().strftime("%Y-%m-%d")
@@ -1388,13 +1899,13 @@ def get_all_eks_costs():
         }
 
         total_costs = {}
-        for period_name, days in periods.items():
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        for period_name, period_days in periods.items():
+            start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%d")
 
             try:
                 cost_response = clients["ce"].get_cost_and_usage(
                     TimePeriod={"Start": start_date, "End": end_date},
-                    Granularity="DAILY" if days <= 7 else "MONTHLY",
+                    Granularity="DAILY" if period_days <= 7 else "MONTHLY",
                     Metrics=["UnblendedCost"],
                     Filter={
                         "Dimensions": {
@@ -1412,9 +1923,9 @@ def get_all_eks_costs():
             except Exception:
                 total_costs[period_name] = None
 
-        # Estimate per-cluster costs
+        # Estimate per-cluster CE costs (rough — CE control-plane spend split evenly)
         cluster_count = len(cluster_names) or 1
-        per_cluster_costs = {}
+        per_cluster_costs: Dict[str, Dict[str, Any]] = {}
         for cluster_name in cluster_names:
             per_cluster_costs[cluster_name] = {
                 "last30Days": round(total_costs.get("last30Days", 0) / cluster_count, 2) if total_costs.get("last30Days") else None,
@@ -1422,11 +1933,110 @@ def get_all_eks_costs():
                 "lastDay": round(total_costs.get("lastDay", 0) / cluster_count, 2) if total_costs.get("lastDay") else None,
             }
 
-        return {
+        grand_total_monthly: Optional[float] = None
+
+        if withNodes and cluster_names:
+            # ONE describe_instances call, partition per cluster in-Python.
+            # Rows shape per cluster:
+            #   {instanceType, capacityType, count, runningCount, hourly, monthly, estimated}
+            per_cluster_nodes: Dict[str, Dict[Tuple[str, str], Dict[str, Any]]] = {
+                name: {} for name in cluster_names
+            }
+            unknown_cluster_membership: Dict[str, int] = {}
+
+            try:
+                ec2_resp = clients["ec2"].describe_instances()
+                for reservation in ec2_resp.get("Reservations", []):
+                    for instance in reservation.get("Instances", []):
+                        state = instance.get("State", {}).get("Name", "unknown")
+                        if state == "terminated":
+                            continue
+                        tags_map: Dict[str, str] = {
+                            t["Key"]: t["Value"] for t in instance.get("Tags", [])
+                        }
+                        parent, _hint, _conflicts = _detect_parent_cluster(tags_map)
+                        if not parent:
+                            continue
+                        instance_type = instance.get("InstanceType") or "unknown"
+                        lifecycle = instance.get("InstanceLifecycle")
+                        capacity_type = "SPOT" if lifecycle == "spot" else "ON_DEMAND"
+
+                        if parent not in per_cluster_nodes:
+                            # Self-managed / unrecognized-cluster tag — track separately
+                            # so ClusterTab doesn't corrupt real cluster totals.
+                            unknown_cluster_membership[parent] = (
+                                unknown_cluster_membership.get(parent, 0) + 1
+                            )
+                            continue
+
+                        buckets = per_cluster_nodes[parent]
+                        key = (instance_type, capacity_type)
+                        bucket = buckets.setdefault(
+                            key,
+                            {
+                                "instanceType": instance_type,
+                                "capacityType": capacity_type,
+                                "count": 0,
+                                "runningCount": 0,
+                            },
+                        )
+                        bucket["count"] += 1
+                        if state == "running":
+                            bucket["runningCount"] += 1
+            except Exception:
+                # If describe_instances fails, leave per_cluster_nodes empty —
+                # node fields will show 0 with estimated=true.
+                pass
+
+            grand_total_monthly = 0.0
+            for name in cluster_names:
+                node_monthly_total = 0.0
+                any_estimated = False
+                node_count = 0
+                running_count = 0
+                for _key, bucket in per_cluster_nodes.get(name, {}).items():
+                    running = bucket["runningCount"]
+                    lifecycle = "spot" if bucket["capacityType"] == "SPOT" else None
+                    _hourly, per_instance_monthly, estimated = _estimate_monthly(
+                        bucket["instanceType"], "running", lifecycle
+                    )
+                    node_monthly_total += per_instance_monthly * running
+                    if estimated:
+                        any_estimated = True
+                    node_count += bucket["count"]
+                    running_count += running
+
+                non_billable = (cluster_statuses.get(name) or "").upper() in {
+                    "CREATING",
+                    "DELETING",
+                    "FAILED",
+                }
+                control_plane_monthly = 0.0 if non_billable else round(
+                    EKS_CONTROL_PLANE_HOURLY * MONTHLY_HOURS, 2
+                )
+                node_monthly_rounded = round(node_monthly_total, 2)
+                total_monthly = round(control_plane_monthly + node_monthly_rounded, 2)
+
+                per_cluster_costs[name].update({
+                    "controlPlaneMonthly": control_plane_monthly,
+                    "nodeMonthly": node_monthly_rounded,
+                    "totalMonthly": total_monthly,
+                    "nodeCount": node_count,
+                    "runningNodeCount": running_count,
+                    "estimated": any_estimated,
+                })
+                grand_total_monthly += total_monthly
+
+            grand_total_monthly = round(grand_total_monthly, 2)
+
+        result: Dict[str, Any] = {
             "totalCosts": total_costs,
             "perClusterCosts": per_cluster_costs,
             "clusterCount": cluster_count,
         }
+        if grand_total_monthly is not None:
+            result["grandTotalMonthly"] = grand_total_monthly
+        return result
     except Exception as e:
         return {"totalCosts": {}, "perClusterCosts": {}, "error": str(e)}
 
