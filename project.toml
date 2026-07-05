@@ -1,5 +1,5 @@
 [project]
-name = "aws-dashboard"
+name = "admin"
 version = "1.0.0"
 
 [[project.licenses]]
@@ -19,16 +19,22 @@ exclude = [
   "electron"
 ]
 
-# Build environment variables
+# Build environment variables — array-of-tables form per Paketo's
+# project.toml spec (single [build.env] table is invalid TOML for
+# the Cloud Native Buildpacks project descriptor schema and fails
+# the pack analyze phase with "incompatible types: TOML value has
+# type mapany; destination has type slice").
 #
 # When deployed via c2a's kpack Image, the git subdirectory should be set to
 # `backend/` so the Paketo Python buildpack detects requirements.txt and Procfile
 # at the build context root. The frontend must be pre-built and its static output
 # committed under backend/static/ (build.sh does this locally; for CI-less kpack
 # builds we ship a pre-built static/ in the repo).
-[build.env]
-# Pin Python to a modern version. Paketo defaults are fine but pinning avoids
-# surprise minor bumps.
-BP_CPYTHON_VERSION = "3.11.*"
-# Ensure Paketo picks Procfile over auto-detected entry points.
-BP_LIVE_RELOAD_ENABLED = "false"
+
+[[build.env]]
+name = "BP_CPYTHON_VERSION"
+value = "3.11.*"
+
+[[build.env]]
+name = "BP_LIVE_RELOAD_ENABLED"
+value = "false"
