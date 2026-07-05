@@ -327,7 +327,7 @@ def costs_by_service(
     end = date.today()
     # Approximate month arithmetic — trailing N*30 days is close enough for
     # CE's own MONTHLY buckets and matches how the frontend labels the range.
-    start = end - timedelta(days=months * 30)
+    start = end - timedelta(days=days)
 
     ce = _ce_client()
     try:
@@ -439,18 +439,20 @@ def costs_historical(
 
 @app.get("/api/costs/top-resources")
 def costs_top_resources(
-    months: int = Query(1, ge=1, le=3),
+    days: int = Query(14, ge=1, le=14),
     limit: int = Query(20, ge=1, le=100),
     _: Dict[str, Any] = Depends(require_system_user),
 ):
-    """Top-N cost-driving resources over the trailing `months` months.
+    """Top-N cost-driving resources over the trailing `days` days.
+    AWS CE requires DAILY granularity + 14-day hard cap when
+    GroupBy=RESOURCE_ID; misleading error says 'hourly'.
 
     Uses CE's RESOURCE_ID dimension. Note: enabling resource-level CE data
     requires opt-in in the AWS account; if the account hasn't opted in, CE
     returns an error which we surface as 502 COST_EXPLORER_ERROR."""
     from datetime import date, timedelta
 
-    cache_key = f"top-resources:{months}:{limit}"
+    cache_key = f"top-resources:{days}:{limit}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -462,7 +464,7 @@ def costs_top_resources(
     try:
         resp = ce.get_cost_and_usage_with_resources(
             TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
-            Granularity="MONTHLY",
+            Granularity="DAILY",
             Metrics=["UnblendedCost"],
             GroupBy=[
                 {"Type": "DIMENSION", "Key": "SERVICE"},
@@ -1679,32 +1681,19 @@ def scale_up_cluster(cluster_name: str, desired_per_nodegroup: int = 2):
 
 @app.post("/api/eks/clusters/{cluster_name}/connect")
 def connect_to_eks_cluster(cluster_name: str):
-    """Update kubeconfig to connect to an EKS cluster."""
-    try:
-        result = subprocess.run(
-            ["aws", "eks", "update-kubeconfig", "--name", cluster_name, "--alias", cluster_name],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise HTTPException(status_code=400, detail=result.stderr)
-
-        # Switch to the new context
-        subprocess.run(
-            ["kubectl", "config", "use-context", cluster_name],
-            capture_output=True, text=True, timeout=10
-        )
-
-        return {
-            "success": True,
-            "message": f"Connected to EKS cluster: {cluster_name}",
-            "output": result.stdout
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="Command timed out")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Shells out to aws/kubectl CLIs — not in Paketo runtime image.
+    Return 501 so the UI can gracefully disable Cluster tab actions.
+    Full boto3+kubernetes-client rewrite tracked separately."""
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "EKS cluster inspection is not yet supported in the cloud "
+            "deploy of Platform Admin. This endpoint shells out to the "
+            "aws + kubectl CLIs which are not present in the runtime "
+            "image. Rewrite to use boto3 + python-kubernetes tracked in "
+            "the backlog. Meanwhile, use the local dev build."
+        ),
+    )
 
 
 # ==================== Kubernetes Cluster Management ====================
