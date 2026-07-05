@@ -38,6 +38,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import GroupAddIcon from '@mui/icons-material/GroupAdd'
 import RemoveCircleIcon from '@mui/icons-material/RemoveCircle'
+import { apiFetch } from '../api'
 
 interface User {
   id: string
@@ -125,10 +126,10 @@ function AccessTab() {
   const fetchData = async () => {
     try {
       const [usersRes, groupsRes, psRes, assignRes] = await Promise.all([
-        fetch('/api/users'),
-        fetch('/api/groups'),
-        fetch('/api/permission-sets'),
-        fetch('/api/account-assignments'),
+        apiFetch('/api/users'),
+        apiFetch('/api/groups'),
+        apiFetch('/api/permission-sets'),
+        apiFetch('/api/account-assignments'),
       ])
 
       const usersData = await usersRes.json()
@@ -153,7 +154,7 @@ function AccessTab() {
 
   const handleCreateUser = async () => {
     try {
-      const response = await fetch('/api/users', {
+      const response = await apiFetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser),
@@ -177,7 +178,7 @@ function AccessTab() {
     if (!selectedUser || !selectedGroupId) return
 
     try {
-      const response = await fetch('/api/groups/add-member', {
+      const response = await apiFetch('/api/groups/add-member', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: selectedUser.id, groupId: selectedGroupId }),
@@ -200,7 +201,7 @@ function AccessTab() {
 
   const handleRemoveFromGroup = async (userId: string, groupId: string, userName: string) => {
     try {
-      const response = await fetch('/api/groups/remove-member', {
+      const response = await apiFetch('/api/groups/remove-member', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, groupId }),

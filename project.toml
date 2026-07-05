@@ -20,5 +20,15 @@ exclude = [
 ]
 
 # Build environment variables
+#
+# When deployed via c2a's kpack Image, the git subdirectory should be set to
+# `backend/` so the Paketo Python buildpack detects requirements.txt and Procfile
+# at the build context root. The frontend must be pre-built and its static output
+# committed under backend/static/ (build.sh does this locally; for CI-less kpack
+# builds we ship a pre-built static/ in the repo).
 [build.env]
-BP_NODE_RUN_SCRIPTS = "build"
+# Pin Python to a modern version. Paketo defaults are fine but pinning avoids
+# surprise minor bumps.
+BP_CPYTHON_VERSION = "3.11.*"
+# Ensure Paketo picks Procfile over auto-detected entry points.
+BP_LIVE_RELOAD_ENABLED = "false"

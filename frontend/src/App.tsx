@@ -16,6 +16,8 @@ import CloseIcon from '@mui/icons-material/Close'
 import ServicesTab from './components/ServicesTab'
 import AccessTab from './components/AccessTab'
 import ClusterTab from './components/ClusterTab'
+import ComputeTab from './components/ComputeTab'
+import PlatformCostTab from './components/PlatformCostTab'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -47,8 +49,8 @@ function App() {
   const initialCluster = urlParams.get('cluster')
   const isFocusedView = !!initialCluster // Focused view when cluster param exists
 
-  // If cluster param exists, start on Clusters tab (index 2)
-  const [tabValue, setTabValue] = useState(initialCluster ? 2 : 0)
+  // If cluster param exists, start on Clusters tab (index 3 after Cost tab was added)
+  const [tabValue, setTabValue] = useState(initialCluster ? 3 : 0)
 
   const handleTabChange = (_: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue)
@@ -126,20 +128,28 @@ function App() {
               }}
             >
               <Tab label="Services" />
-              <Tab label="Users, Roles & Groups" />
+              <Tab label="Compute" />
+              <Tab label="Cost" />
               <Tab label="Clusters" />
+              <Tab label="Users & Access" />
             </Tabs>
           </Box>
         </motion.div>
 
         <TabPanel value={tabValue} index={0}>
-          <ServicesTab />
+          <ServicesTab onNavigateToTab={setTabValue} />
         </TabPanel>
         <TabPanel value={tabValue} index={1}>
-          <AccessTab />
+          <ComputeTab />
         </TabPanel>
         <TabPanel value={tabValue} index={2}>
+          <PlatformCostTab />
+        </TabPanel>
+        <TabPanel value={tabValue} index={3}>
           <ClusterTab initialCluster={null} />
+        </TabPanel>
+        <TabPanel value={tabValue} index={4}>
+          <AccessTab />
         </TabPanel>
       </Container>
     </Box>

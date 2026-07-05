@@ -1,14 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+import base64
 import boto3
+import jwt
 import json
 import subprocess
 import os
+import threading
+import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any, Dict, Tuple
 
 # Load configuration from config.json
 # Try multiple paths to support both local dev and Docker
@@ -64,13 +68,466 @@ app.add_middleware(
 )
 
 
+# ============================================================================
+# JWT AUTHENTICATION (SYSTEM users only)
+# ============================================================================
+#
+# HS256 shared-secret JWT minted by the c2a coordinator/auth service. The env
+# var C2A_JWT_SECRET is BASE64-encoded (matches the java-jwt Keys.hmacShaKeyFor
+# convention on the coordinator side) — it MUST be base64-decoded before being
+# passed to PyJWT, otherwise signature verification silently fails.
+#
+# Enforcement is done via an ASGI HTTP middleware so we don't have to modify
+# the body of every existing route. /api/health is exempt (Knative probes).
+# ============================================================================
+
+JWT_ALG = "HS256"
+_JWT_SECRET_B64 = os.environ.get("C2A_JWT_SECRET", "")
+try:
+    JWT_SECRET_BYTES = base64.b64decode(_JWT_SECRET_B64) if _JWT_SECRET_B64 else b""
+except Exception:
+    JWT_SECRET_BYTES = b""
+
+# Endpoints that skip auth entirely. Knative liveness/readiness probes need
+# these. Everything else requires a valid SYSTEM-user Bearer token.
+AUTH_EXEMPT_PATHS = {"/api/health"}
+
+
+def _json_error(status: int, error: str, message: str) -> JSONResponse:
+    """Consistent error shape matching the coordinator's JwtAuthenticationFilter."""
+    return JSONResponse(status_code=status, content={"error": error, "message": message})
+
+
+def _verify_token(token: str) -> Dict[str, Any]:
+    """Decode+verify a JWT. Raises HTTPException on failure."""
+    if not JWT_SECRET_BYTES:
+        raise HTTPException(status_code=500, detail="C2A_JWT_SECRET not configured")
+    try:
+        claims = jwt.decode(
+            token,
+            JWT_SECRET_BYTES,
+            algorithms=[JWT_ALG],
+            options={
+                "require": ["exp", "sub"],
+                "verify_signature": True,
+                "verify_exp": True,
+            },
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="token expired")
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"invalid token: {e}")
+    return claims
+
+
+def _extract_token(request: Request) -> Optional[str]:
+    """Pull the JWT from Authorization: Bearer <t>, falling back to ?token=."""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    qp = request.query_params.get("token")
+    if qp:
+        return qp.strip()
+    return None
+
+
+@app.middleware("http")
+async def jwt_auth_middleware(request: Request, call_next):
+    """Enforce SYSTEM-user JWT on every /api/* endpoint except AUTH_EXEMPT_PATHS.
+    Non-/api/ routes (static SPA files) pass through untouched."""
+    path = request.url.path
+
+    # Only guard /api/* routes. Static SPA files are public.
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    # CORS preflight — let the CORS middleware handle it.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    if path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    token = _extract_token(request)
+    if not token:
+        return _json_error(401, "UNAUTHORIZED", "missing bearer token")
+
+    try:
+        claims = _verify_token(token)
+    except HTTPException as e:
+        code = "UNAUTHORIZED" if e.status_code == 401 else "SERVER_ERROR"
+        return _json_error(e.status_code, code, str(e.detail))
+
+    if claims.get("userType") != "SYSTEM":
+        return _json_error(403, "FORBIDDEN", "SYSTEM users only")
+
+    # Stash claims on request state for any downstream handler that wants them.
+    request.state.jwt_claims = claims
+    return await call_next(request)
+
+
+def require_system_user(request: Request) -> Dict[str, Any]:
+    """FastAPI dependency form of the same check.
+
+    The HTTP middleware above already enforces auth cluster-wide, but exposing
+    this dependency lets new endpoints (the cost endpoints below) declare their
+    auth requirement explicitly at the route level for clarity/testability."""
+    token = _extract_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    claims = _verify_token(token)
+    if claims.get("userType") != "SYSTEM":
+        raise HTTPException(status_code=403, detail="SYSTEM users only")
+    return claims
+
+
+# ============================================================================
+# COST EXPLORER ENDPOINTS
+# ============================================================================
+#
+# All responses are shaped to the design contract in the accompanying design
+# doc: USD, 2-decimal rounding, ISO-8601 dates, `generated_at` UTC timestamp.
+# Cost Explorer is us-east-1 only and each call costs $0.01 — we cache every
+# response in-memory for 15 minutes.
+# ============================================================================
+
+_CE_CACHE_TTL_SECONDS = 15 * 60
+_ce_cache: Dict[str, Tuple[float, Any]] = {}
+_ce_cache_lock = threading.Lock()
+
+
+def _ce_client():
+    return boto3.client("ce", region_name="us-east-1")
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    with _ce_cache_lock:
+        entry = _ce_cache.get(key)
+        if entry is None:
+            return None
+        ts, value = entry
+        if time.time() - ts > _CE_CACHE_TTL_SECONDS:
+            _ce_cache.pop(key, None)
+            return None
+        return value
+
+
+def _cache_put(key: str, value: Any) -> None:
+    with _ce_cache_lock:
+        _ce_cache[key] = (time.time(), value)
+
+
+def _iso_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _month_start(dt) -> str:
+    return dt.strftime("%Y-%m-01")
+
+
+def _ce_error_response(exc: Exception) -> JSONResponse:
+    return _json_error(502, "COST_EXPLORER_ERROR", str(exc))
+
+
+@app.get("/api/costs/summary")
+def costs_summary(_: Dict[str, Any] = Depends(require_system_user)):
+    """Hero-card summary: MTD vs previous-month-to-date."""
+    from datetime import date, timedelta
+
+    cache_key = "summary"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+    mtd_start = today.replace(day=1)
+    # CE End is exclusive. For the current month we ask for [1st, today], and
+    # if today IS the 1st we widen by a day so CE has a non-empty window.
+    mtd_query_end = today if today > mtd_start else mtd_start + timedelta(days=1)
+
+    # Previous full month
+    if mtd_start.month == 1:
+        prev_month_start = mtd_start.replace(year=mtd_start.year - 1, month=12, day=1)
+    else:
+        prev_month_start = mtd_start.replace(month=mtd_start.month - 1, day=1)
+    prev_month_end = mtd_start  # exclusive — day 1 of current month
+
+    # Previous month-to-date (same day-of-month window as current MTD)
+    day_offset = (today - mtd_start).days
+    prev_mtd_start = prev_month_start
+    prev_mtd_end = prev_month_start + timedelta(days=day_offset) if day_offset > 0 else prev_month_start
+
+    ce = _ce_client()
+
+    def _total(start, end):
+        if start >= end:
+            return 0.0
+        resp = ce.get_cost_and_usage(
+            TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+        )
+        total = 0.0
+        for r in resp.get("ResultsByTime", []):
+            total += float(r.get("Total", {}).get("UnblendedCost", {}).get("Amount", 0))
+        return total
+
+    try:
+        mtd_cost = _total(mtd_start, mtd_query_end)
+        prev_month_cost = _total(prev_month_start, prev_month_end)
+        prev_mtd_cost = _total(prev_mtd_start, prev_mtd_end) if prev_mtd_end > prev_mtd_start else 0.0
+    except Exception as e:
+        return _ce_error_response(e)
+
+    if prev_mtd_cost == 0:
+        delta_pct = None
+    else:
+        delta_pct = round((mtd_cost - prev_mtd_cost) / prev_mtd_cost * 100, 2)
+
+    result = {
+        "currency": "USD",
+        "mtd": {
+            "start": mtd_start.isoformat(),
+            "end": today.isoformat(),
+            "cost": round(mtd_cost, 2),
+        },
+        "previous_month": {
+            "start": prev_month_start.isoformat(),
+            "end": (prev_month_end - timedelta(days=1)).isoformat(),
+            "cost": round(prev_month_cost, 2),
+        },
+        "previous_month_to_date": {
+            "start": prev_mtd_start.isoformat(),
+            "end": prev_mtd_end.isoformat(),
+            "cost": round(prev_mtd_cost, 2),
+            "note": "same day-of-month window as mtd, for fair comparison",
+        },
+        "delta_pct": delta_pct,
+        "delta_pct_basis": "mtd_vs_previous_month_to_date",
+        "generated_at": _iso_now(),
+    }
+    _cache_put(cache_key, result)
+    return result
+
+
+@app.get("/api/costs/by-service")
+def costs_by_service(
+    months: int = Query(1, ge=1, le=12),
+    _: Dict[str, Any] = Depends(require_system_user),
+):
+    """Cost broken down by AWS service over the trailing `months` months."""
+    from datetime import date, timedelta
+
+    cache_key = f"by-service:{months}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today()
+    # Approximate month arithmetic — trailing N*30 days is close enough for
+    # CE's own MONTHLY buckets and matches how the frontend labels the range.
+    start = end - timedelta(days=months * 30)
+
+    ce = _ce_client()
+    try:
+        resp = ce.get_cost_and_usage(
+            TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+            GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
+        )
+    except Exception as e:
+        return _ce_error_response(e)
+
+    # Aggregate across the time buckets CE returns
+    totals: Dict[str, float] = {}
+    for bucket in resp.get("ResultsByTime", []):
+        for group in bucket.get("Groups", []):
+            name = group["Keys"][0]
+            amt = float(group["Metrics"]["UnblendedCost"]["Amount"])
+            totals[name] = totals.get(name, 0.0) + amt
+
+    total_all = sum(totals.values())
+    services = []
+    for name, cost in sorted(totals.items(), key=lambda kv: kv[1], reverse=True):
+        pct = round((cost / total_all * 100), 2) if total_all > 0 else 0.0
+        services.append({
+            "service": name,
+            "cost": round(cost, 2),
+            "pct_of_total": pct,
+        })
+
+    result = {
+        "currency": "USD",
+        "period": {"start": start.isoformat(), "end": end.isoformat()},
+        "total": round(total_all, 2),
+        "services": services,
+        "generated_at": _iso_now(),
+    }
+    _cache_put(cache_key, result)
+    return result
+
+
+@app.get("/api/costs/historical")
+def costs_historical(
+    months: int = Query(6, ge=1, le=24),
+    _: Dict[str, Any] = Depends(require_system_user),
+):
+    """Trailing-N-month monthly cost series."""
+    from datetime import date
+
+    cache_key = f"historical:{months}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+
+    # Compute the first-of-month `months-1` months ago.
+    y, m = today.year, today.month
+    back = months - 1
+    for _i in range(back):
+        if m == 1:
+            m = 12
+            y -= 1
+        else:
+            m -= 1
+    start = date(y, m, 1)
+    # CE End is exclusive; using today covers the current (partial) month.
+    end = today
+
+    ce = _ce_client()
+    try:
+        resp = ce.get_cost_and_usage(
+            TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+        )
+    except Exception as e:
+        return _ce_error_response(e)
+
+    by_month: Dict[str, float] = {}
+    for bucket in resp.get("ResultsByTime", []):
+        period_start = bucket.get("TimePeriod", {}).get("Start")
+        if period_start:
+            by_month[period_start] = float(
+                bucket.get("Total", {}).get("UnblendedCost", {}).get("Amount", 0)
+            )
+
+    # Walk month-by-month from `start` to `today`, emitting 0.0 for gaps.
+    series = []
+    cy, cm = start.year, start.month
+    while (cy, cm) <= (today.year, today.month):
+        key = date(cy, cm, 1).isoformat()
+        series.append({"date": key, "cost": round(by_month.get(key, 0.0), 2)})
+        if cm == 12:
+            cm = 1
+            cy += 1
+        else:
+            cm += 1
+
+    result = {
+        "currency": "USD",
+        "granularity": "MONTHLY",
+        "series": series,
+        "generated_at": _iso_now(),
+    }
+    _cache_put(cache_key, result)
+    return result
+
+
+@app.get("/api/costs/top-resources")
+def costs_top_resources(
+    months: int = Query(1, ge=1, le=3),
+    limit: int = Query(20, ge=1, le=100),
+    _: Dict[str, Any] = Depends(require_system_user),
+):
+    """Top-N cost-driving resources over the trailing `months` months.
+
+    Uses CE's RESOURCE_ID dimension. Note: enabling resource-level CE data
+    requires opt-in in the AWS account; if the account hasn't opted in, CE
+    returns an error which we surface as 502 COST_EXPLORER_ERROR."""
+    from datetime import date, timedelta
+
+    cache_key = f"top-resources:{months}:{limit}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today()
+    start = end - timedelta(days=months * 30)
+
+    ce = _ce_client()
+    try:
+        resp = ce.get_cost_and_usage_with_resources(
+            TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+            GroupBy=[
+                {"Type": "DIMENSION", "Key": "SERVICE"},
+                {"Type": "DIMENSION", "Key": "RESOURCE_ID"},
+            ],
+            Filter={
+                "Not": {
+                    "Dimensions": {
+                        "Key": "RECORD_TYPE",
+                        "Values": ["Credit", "Refund"],
+                    }
+                }
+            },
+        )
+    except Exception as e:
+        return _ce_error_response(e)
+
+    # Aggregate cost per (resource_id, service) across time buckets
+    agg: Dict[Tuple[str, str], float] = {}
+    for bucket in resp.get("ResultsByTime", []):
+        for group in bucket.get("Groups", []):
+            keys = group.get("Keys", [])
+            # GroupBy order: SERVICE first, RESOURCE_ID second
+            service = keys[0] if len(keys) > 0 else ""
+            resource_id = keys[1] if len(keys) > 1 else ""
+            if not resource_id or resource_id == "NoResourceId":
+                continue
+            amt = float(group["Metrics"]["UnblendedCost"]["Amount"])
+            agg[(resource_id, service)] = agg.get((resource_id, service), 0.0) + amt
+
+    ranked = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+
+    resources = []
+    for (resource_id, service), cost in ranked:
+        # CE doesn't return tags in the groups response — we intentionally
+        # leave `tags` empty rather than paying for a second CE call per row.
+        resources.append({
+            "resource_id": resource_id,
+            "service": service,
+            "cost": round(cost, 2),
+            "tags": {},
+        })
+
+    result = {
+        "currency": "USD",
+        "period": {"start": start.isoformat(), "end": end.isoformat()},
+        "total_resources_reported": len(resources),
+        "resources": resources,
+        "generated_at": _iso_now(),
+    }
+    _cache_put(cache_key, result)
+    return result
+
+
 def get_boto_clients():
     return {
-        "ce": boto3.client("ce"),
+        # Cost Explorer is us-east-1 only — pinned in code so the legacy
+        # /api/services endpoint doesn't silently 400 if AWS_REGION is
+        # overridden away from us-east-1.
+        "ce": boto3.client("ce", region_name="us-east-1"),
         "identitystore": boto3.client("identitystore"),
         "sso_admin": boto3.client("sso-admin"),
         "resourcegroupstaggingapi": boto3.client("resourcegroupstaggingapi"),
         "eks": boto3.client("eks"),
+        "ec2": boto3.client("ec2"),
     }
 
 
@@ -139,6 +596,234 @@ def get_resources():
         return {"resources": resources}
     except Exception as e:
         return {"resources": [], "error": str(e)}
+
+
+# ============================================================================
+# EC2 ENDPOINTS
+# ============================================================================
+
+@app.get("/api/ec2/instances")
+def get_ec2_instances():
+    """Get all EC2 instances with details."""
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].describe_instances()
+        instances = []
+
+        for reservation in response.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                # Get instance name from tags
+                name = ""
+                for tag in instance.get("Tags", []):
+                    if tag["Key"] == "Name":
+                        name = tag["Value"]
+                        break
+
+                # Calculate uptime
+                launch_time = instance.get("LaunchTime")
+                uptime = ""
+                if launch_time:
+                    from datetime import datetime, timezone
+                    now = datetime.now(timezone.utc)
+                    delta = now - launch_time
+                    days = delta.days
+                    hours = delta.seconds // 3600
+                    if days > 0:
+                        uptime = f"{days}d {hours}h"
+                    else:
+                        uptime = f"{hours}h"
+
+                instances.append({
+                    "instanceId": instance.get("InstanceId"),
+                    "name": name,
+                    "state": instance.get("State", {}).get("Name", "unknown"),
+                    "instanceType": instance.get("InstanceType"),
+                    "privateIp": instance.get("PrivateIpAddress"),
+                    "publicIp": instance.get("PublicIpAddress"),
+                    "launchTime": str(instance.get("LaunchTime")) if instance.get("LaunchTime") else None,
+                    "uptime": uptime,
+                    "availabilityZone": instance.get("Placement", {}).get("AvailabilityZone"),
+                    "vpcId": instance.get("VpcId"),
+                    "subnetId": instance.get("SubnetId"),
+                    "platform": instance.get("PlatformDetails", "Linux/UNIX"),
+                    "architecture": instance.get("Architecture"),
+                    "tags": {t["Key"]: t["Value"] for t in instance.get("Tags", [])},
+                })
+
+        # Sort by name
+        instances.sort(key=lambda x: (x["state"] != "running", x["name"].lower()))
+        return {"instances": instances}
+    except Exception as e:
+        return {"instances": [], "error": str(e)}
+
+
+@app.get("/api/ec2/instances/{instance_id}")
+def get_ec2_instance_details(instance_id: str):
+    """Get detailed information about a specific EC2 instance."""
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].describe_instances(InstanceIds=[instance_id])
+        if not response.get("Reservations"):
+            raise HTTPException(status_code=404, detail="Instance not found")
+
+        instance = response["Reservations"][0]["Instances"][0]
+
+        # Get security groups details
+        security_groups = []
+        for sg in instance.get("SecurityGroups", []):
+            sg_response = clients["ec2"].describe_security_groups(GroupIds=[sg["GroupId"]])
+            if sg_response.get("SecurityGroups"):
+                sg_details = sg_response["SecurityGroups"][0]
+                security_groups.append({
+                    "groupId": sg_details.get("GroupId"),
+                    "groupName": sg_details.get("GroupName"),
+                    "inboundRules": len(sg_details.get("IpPermissions", [])),
+                    "outboundRules": len(sg_details.get("IpPermissionsEgress", [])),
+                })
+
+        # Get volumes
+        volumes = []
+        for mapping in instance.get("BlockDeviceMappings", []):
+            ebs = mapping.get("Ebs", {})
+            if ebs.get("VolumeId"):
+                vol_response = clients["ec2"].describe_volumes(VolumeIds=[ebs["VolumeId"]])
+                if vol_response.get("Volumes"):
+                    vol = vol_response["Volumes"][0]
+                    volumes.append({
+                        "volumeId": vol.get("VolumeId"),
+                        "deviceName": mapping.get("DeviceName"),
+                        "size": vol.get("Size"),
+                        "volumeType": vol.get("VolumeType"),
+                        "iops": vol.get("Iops"),
+                        "encrypted": vol.get("Encrypted"),
+                    })
+
+        name = ""
+        for tag in instance.get("Tags", []):
+            if tag["Key"] == "Name":
+                name = tag["Value"]
+                break
+
+        return {
+            "instanceId": instance.get("InstanceId"),
+            "name": name,
+            "state": instance.get("State", {}).get("Name"),
+            "instanceType": instance.get("InstanceType"),
+            "privateIp": instance.get("PrivateIpAddress"),
+            "publicIp": instance.get("PublicIpAddress"),
+            "launchTime": str(instance.get("LaunchTime")),
+            "availabilityZone": instance.get("Placement", {}).get("AvailabilityZone"),
+            "vpcId": instance.get("VpcId"),
+            "subnetId": instance.get("SubnetId"),
+            "platform": instance.get("PlatformDetails"),
+            "architecture": instance.get("Architecture"),
+            "amiId": instance.get("ImageId"),
+            "keyName": instance.get("KeyName"),
+            "iamRole": instance.get("IamInstanceProfile", {}).get("Arn"),
+            "securityGroups": security_groups,
+            "volumes": volumes,
+            "tags": {t["Key"]: t["Value"] for t in instance.get("Tags", [])},
+            "monitoring": instance.get("Monitoring", {}).get("State"),
+            "cpuOptions": instance.get("CpuOptions"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ec2/instances/{instance_id}/start")
+def start_ec2_instance(instance_id: str):
+    """Start an EC2 instance."""
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].start_instances(InstanceIds=[instance_id])
+        return {
+            "success": True,
+            "instanceId": instance_id,
+            "previousState": response["StartingInstances"][0]["PreviousState"]["Name"],
+            "currentState": response["StartingInstances"][0]["CurrentState"]["Name"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ec2/instances/{instance_id}/stop")
+def stop_ec2_instance(instance_id: str):
+    """Stop an EC2 instance."""
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].stop_instances(InstanceIds=[instance_id])
+        return {
+            "success": True,
+            "instanceId": instance_id,
+            "previousState": response["StoppingInstances"][0]["PreviousState"]["Name"],
+            "currentState": response["StoppingInstances"][0]["CurrentState"]["Name"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ec2/instances/{instance_id}/reboot")
+def reboot_ec2_instance(instance_id: str):
+    """Reboot an EC2 instance."""
+    clients = get_boto_clients()
+
+    try:
+        clients["ec2"].reboot_instances(InstanceIds=[instance_id])
+        return {
+            "success": True,
+            "instanceId": instance_id,
+            "message": "Reboot initiated",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ec2/summary")
+def get_ec2_summary():
+    """Get EC2 summary statistics."""
+    clients = get_boto_clients()
+
+    try:
+        response = clients["ec2"].describe_instances()
+
+        summary = {
+            "total": 0,
+            "running": 0,
+            "stopped": 0,
+            "pending": 0,
+            "terminated": 0,
+            "byType": {},
+            "byAz": {},
+        }
+
+        for reservation in response.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                state = instance.get("State", {}).get("Name", "unknown")
+                instance_type = instance.get("InstanceType", "unknown")
+                az = instance.get("Placement", {}).get("AvailabilityZone", "unknown")
+
+                summary["total"] += 1
+                if state == "running":
+                    summary["running"] += 1
+                elif state == "stopped":
+                    summary["stopped"] += 1
+                elif state == "pending":
+                    summary["pending"] += 1
+                elif state == "terminated":
+                    summary["terminated"] += 1
+
+                summary["byType"][instance_type] = summary["byType"].get(instance_type, 0) + 1
+                summary["byAz"][az] = summary["byAz"].get(az, 0) + 1
+
+        return summary
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/users")
