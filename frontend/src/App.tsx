@@ -19,6 +19,7 @@ import ClusterTab from './components/ClusterTab'
 import ComputeTab from './components/ComputeTab'
 import PlatformCostTab from './components/PlatformCostTab'
 import AgentsTab from './components/AgentsTab'
+import DocsTab from './components/DocsTab'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -134,6 +135,7 @@ function App() {
               <Tab label="Agents" />
               <Tab label="Clusters" />
               <Tab label="Users & Access" />
+              <Tab label="Docs" />
             </Tabs>
           </Box>
         </motion.div>
@@ -155,6 +157,9 @@ function App() {
         </TabPanel>
         <TabPanel value={tabValue} index={5}>
           <AccessTab />
+        </TabPanel>
+        <TabPanel value={tabValue} index={6}>
+          <DocsTab />
         </TabPanel>
       </Container>
     </Box>
