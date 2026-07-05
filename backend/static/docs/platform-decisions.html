@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Platform decisions — Clue2App</title>
+</head>
+<body>
+<title>Platform decisions — DB strategy, admin IA, rollout</title>
+<style>
+  :root {
+    --ground: #0F1216;
+    --panel: #F5F2EB;
+    --panel-edge: #E8E3D6;
+    --ink: #3D4148;
+    --ink-soft: #5C6067;
+    --meta: #8A8E96;
+    --rule: #D8D3C4;
+    --amber: #D97D3E;
+    --amber-soft: #EAA470;
+    --moss: #4A6D5D;
+    --moss-soft: #7C9C8E;
+    --warn: #B3502A;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 15.5px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .display {
+    font-family: ui-serif, "Iowan Old Style", "Palatino Linotype", "URW Palladio L", "Book Antiqua", Palatino, serif;
+    font-weight: 500;
+    letter-spacing: -0.008em;
+    text-wrap: balance;
+  }
+
+  code, .mono, .dollar {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .page {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 56px;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 56px 40px 96px;
+    background: var(--panel);
+    min-height: 100vh;
+  }
+
+  aside {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .brand {
+    font-family: ui-serif, "Iowan Old Style", Palatino, serif;
+    font-size: 15px;
+    line-height: 1.35;
+    color: var(--ink);
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .brand .kicker {
+    display: block;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 10.5px;
+    color: var(--meta);
+    margin-bottom: 6px;
+  }
+
+  nav ol {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    counter-reset: nav;
+  }
+
+  nav a {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    align-items: baseline;
+    text-decoration: none;
+    color: var(--ink-soft);
+    padding: 6px 0;
+    font-size: 14px;
+    line-height: 1.3;
+    border-radius: 3px;
+  }
+
+  nav a:hover, nav a:focus-visible {
+    color: var(--ground);
+    outline: none;
+  }
+
+  nav a .num {
+    color: var(--meta);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+  }
+
+  .footnote {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--meta);
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+  }
+
+  main { min-width: 0; }
+
+  section {
+    padding-top: 12px;
+    margin-bottom: 72px;
+  }
+
+  section > .eyebrow {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--meta);
+    margin-bottom: 12px;
+  }
+
+  h1 {
+    font-size: 42px;
+    line-height: 1.12;
+    margin: 0 0 20px;
+    color: var(--ground);
+  }
+
+  h2 {
+    font-size: 26px;
+    line-height: 1.2;
+    margin: 0 0 18px;
+    color: var(--ground);
+  }
+
+  h3 {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    font-size: 15px;
+    text-transform: none;
+    margin: 32px 0 10px;
+    color: var(--ground);
+  }
+
+  p, li { max-width: 66ch; }
+
+  .lede {
+    font-family: ui-serif, "Iowan Old Style", Palatino, serif;
+    font-size: 21px;
+    line-height: 1.45;
+    color: var(--ground);
+    margin: 0 0 44px;
+    max-width: 30ch;
+    text-wrap: balance;
+  }
+
+  .metadata {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--meta);
+    margin: 0 0 44px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .metadata b {
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  /* Decision cards */
+  .decisions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 40px;
+  }
+
+  .card {
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-left: 3px solid var(--amber);
+    padding: 22px 24px 24px;
+    border-radius: 2px;
+  }
+
+  .card .label {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--amber);
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .card .thesis {
+    font-family: ui-serif, Palatino, serif;
+    font-size: 18px;
+    line-height: 1.35;
+    color: var(--ground);
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+
+  .card .why {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+
+  .card .money {
+    display: inline-block;
+    margin-top: 12px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 13.5px;
+    color: var(--ground);
+    padding: 3px 8px;
+    background: rgba(217, 125, 62, 0.12);
+    border-radius: 2px;
+  }
+
+  /* Comparison table */
+  .table-scroll {
+    overflow-x: auto;
+    margin: 24px 0 20px;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+    background: #FFFDF7;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+
+  thead th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--meta);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 10.5px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--panel);
+    white-space: nowrap;
+  }
+
+  tbody td {
+    padding: 14px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--panel-edge);
+    color: var(--ink);
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  tbody tr.pick { background: rgba(217, 125, 62, 0.055); }
+  tbody tr.pick td:first-child {
+    border-left: 3px solid var(--amber);
+    padding-left: 11px;
+  }
+
+  td.opt {
+    font-weight: 600;
+    color: var(--ground);
+    white-space: nowrap;
+  }
+
+  td.opt .sub {
+    display: block;
+    font-weight: 400;
+    color: var(--meta);
+    font-size: 11.5px;
+    margin-top: 3px;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+
+  td.price {
+    font-family: ui-monospace, Menlo, monospace;
+    color: var(--ground);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  td.price .sub {
+    display: block;
+    font-size: 11px;
+    color: var(--meta);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    margin-top: 2px;
+    white-space: normal;
+  }
+
+  /* Semantic pills */
+  .pill {
+    display: inline-block;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 2px;
+    line-height: 1.5;
+  }
+  .pill.new { color: var(--moss); background: rgba(74,109,93,0.11); }
+  .pill.mig { color: #6A4E1F; background: rgba(214,177,110,0.20); }
+  .pill.emb { color: var(--ink-soft); background: rgba(60,64,72,0.08); }
+  .pill.p1 { color: var(--amber); background: rgba(217,125,62,0.14); }
+  .pill.p2 { color: var(--ink); background: rgba(60,64,72,0.10); }
+  .pill.p3 { color: var(--meta); background: rgba(138,142,150,0.14); }
+  .pill.done { color: var(--moss); background: rgba(74,109,93,0.13); }
+  .pill.open { color: var(--warn); background: rgba(179,80,42,0.10); }
+
+  .callout {
+    border-left: 3px solid var(--moss);
+    padding: 14px 20px;
+    background: rgba(74,109,93,0.05);
+    margin: 24px 0;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .callout b { color: var(--ground); }
+
+  .caveat {
+    border-left: 3px solid var(--warn);
+    padding: 14px 20px;
+    background: rgba(179,80,42,0.045);
+    margin: 24px 0;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  /* Trigger list */
+  .triggers {
+    margin: 20px 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 14px;
+  }
+
+  .triggers li {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 20px;
+    align-items: baseline;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .triggers li:last-child { border-bottom: none; }
+
+  .triggers .then {
+    font-family: ui-serif, Palatino, serif;
+    font-style: italic;
+    color: var(--ground);
+    font-size: 14.5px;
+  }
+
+  .triggers .when {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    color: var(--meta);
+    text-transform: uppercase;
+  }
+
+  /* IA nav map */
+  .ia-map {
+    display: grid;
+    gap: 4px;
+    margin: 24px 0 8px;
+  }
+
+  .ia-row {
+    display: grid;
+    grid-template-columns: 32px 1fr auto auto;
+    gap: 16px;
+    align-items: baseline;
+    padding: 12px 16px;
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+  }
+
+  .ia-row .idx {
+    font-family: ui-monospace, Menlo, monospace;
+    color: var(--meta);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+
+  .ia-row .name {
+    font-weight: 600;
+    color: var(--ground);
+    font-size: 14.5px;
+  }
+
+  .ia-row .desc {
+    display: block;
+    font-weight: 400;
+    color: var(--ink-soft);
+    font-size: 12.5px;
+    line-height: 1.4;
+    margin-top: 3px;
+    max-width: 56ch;
+  }
+
+  .ia-row .tags { display: flex; gap: 6px; }
+
+  /* Phase timeline */
+  .phase {
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+    padding: 20px 24px 22px;
+    margin: 14px 0;
+  }
+
+  .phase-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .phase-head .name {
+    font-family: ui-serif, Palatino, serif;
+    font-size: 20px;
+    color: var(--ground);
+    line-height: 1.2;
+  }
+
+  .phase-head .when {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    color: var(--meta);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .phase ul {
+    padding-left: 20px;
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .phase ul li { margin: 5px 0; max-width: 62ch; }
+
+  /* P1 checklist */
+  .checklist {
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+    padding: 22px 26px;
+  }
+
+  .checklist h3 {
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--rule);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--meta);
+    font-weight: 600;
+  }
+
+  .checklist h3:first-of-type {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .checklist ul { list-style: none; padding: 0; margin: 0; }
+  .checklist li {
+    padding: 5px 0 5px 24px;
+    position: relative;
+    color: var(--ink);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .checklist li::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 10px;
+    width: 12px; height: 12px;
+    border: 1.5px solid var(--rule);
+    background: transparent;
+    border-radius: 2px;
+  }
+
+  .checklist li.done::before {
+    background: var(--moss);
+    border-color: var(--moss);
+  }
+
+  .checklist li.done { color: var(--ink-soft); }
+
+  .checklist li code {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    background: rgba(60,64,72,0.06);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  /* Open questions */
+  .questions {
+    counter-reset: q;
+    list-style: none;
+    padding: 0;
+    margin: 20px 0;
+    display: grid;
+    gap: 12px;
+  }
+
+  .questions li {
+    counter-increment: q;
+    padding: 14px 18px 14px 46px;
+    position: relative;
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+    font-size: 13.5px;
+    color: var(--ink);
+    line-height: 1.5;
+    max-width: none;
+  }
+
+  .questions li::before {
+    content: "Q" counter(q);
+    position: absolute;
+    left: 16px; top: 14px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    color: var(--meta);
+    letter-spacing: 0.03em;
+  }
+
+  .questions li b { color: var(--ground); font-weight: 600; }
+  .questions li em {
+    display: block;
+    color: var(--ink-soft);
+    font-style: normal;
+    font-size: 12.5px;
+    margin-top: 6px;
+  }
+
+  /* PR ledger */
+  .prs {
+    display: grid;
+    gap: 6px;
+    margin: 16px 0 0;
+  }
+
+  .pr {
+    display: grid;
+    grid-template-columns: 90px 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    padding: 10px 14px;
+    background: #FFFDF7;
+    border: 1px solid var(--panel-edge);
+    border-radius: 2px;
+    font-size: 13px;
+  }
+
+  .pr .repo {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--meta);
+    letter-spacing: 0.02em;
+  }
+
+  .pr .title {
+    color: var(--ground);
+    line-height: 1.4;
+  }
+
+  .pr .num {
+    font-family: ui-monospace, Menlo, monospace;
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  a {
+    color: var(--amber);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+  a:hover { border-bottom-color: var(--amber); }
+
+  hr.section-rule {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 0 0 40px;
+  }
+
+  @media (max-width: 900px) {
+    .page {
+      grid-template-columns: 1fr;
+      gap: 32px;
+      padding: 32px 22px 64px;
+    }
+    aside { position: static; }
+    nav ol { flex-direction: row; overflow-x: auto; gap: 20px; }
+    nav a { grid-template-columns: auto auto; gap: 6px; padding: 4px 0; }
+    .decisions { grid-template-columns: 1fr; }
+    .lede { font-size: 19px; }
+    h1 { font-size: 32px; }
+    .triggers li { grid-template-columns: 1fr; gap: 4px; }
+    .ia-row { grid-template-columns: 26px 1fr; }
+    .ia-row .tags { grid-column: 2; margin-top: 6px; }
+  }
+</style>
+
+<div class="page">
+  <aside>
+    <div class="brand">
+      <span class="kicker">Clue2App · Planning</span>
+      Platform decisions
+    </div>
+    <nav aria-label="Contents">
+      <ol>
+        <li><a href="#decisions"><span class="num">01</span><span>What we're deciding</span></a></li>
+        <li><a href="#database"><span class="num">02</span><span>Database strategy</span></a></li>
+        <li><a href="#ia"><span class="num">03</span><span>Admin dashboard IA</span></a></li>
+        <li><a href="#rollout"><span class="num">04</span><span>Rollout &amp; P1 punch list</span></a></li>
+        <li><a href="#open"><span class="num">05</span><span>Open questions</span></a></li>
+        <li><a href="#ledger"><span class="num">06</span><span>Shipped this session</span></a></li>
+      </ol>
+    </nav>
+    <div class="footnote">
+      Author: platform. Sourced from three parallel research workflows (w3ajl24py, wcyuaqbrq, w3mwtabje) run 2026-07-05. Prices are July 2026 us-west-2 list, on-demand unless noted.
+    </div>
+  </aside>
+
+  <main>
+    <span class="eyebrow" style="color: var(--amber);">Decision memo · 2026-07-05</span>
+    <h1>Where we land the database, where the admin app goes, and what we ship first.</h1>
+    <p class="lede">Two decisions locked, one rollout sequenced. So neither becomes tribal memory.</p>
+    <div class="metadata">
+      <span><b>Scope</b> DB strategy + admin IA</span>
+      <span><b>Horizon</b> 12 weeks</span>
+      <span><b>Team size</b> 1–3 engineers</span>
+      <span><b>Current scale</b> ~1k users · &lt;200 GB · low-hundreds QPS</span>
+    </div>
+
+    <!-- ================================================================ -->
+    <section id="decisions">
+      <span class="eyebrow">Decisions locked</span>
+      <h2>Two things we're committing to now.</h2>
+      <p>Both fell out cleanly from the research; both have well-defined "trip" conditions if the assumptions shift. The rest of this memo is the reasoning and the punch list.</p>
+
+      <div class="decisions">
+        <div class="card">
+          <span class="label">Database</span>
+          <p class="thesis">Stay on RDS PostgreSQL. Move off Single-AZ t4g burstable to Multi-AZ m6g.large. Buy the Reserved Instance after 90 days at size.</p>
+          <p class="why">"Sustainable dependable" for a founder-led team means the DB must never be the thing that wakes someone up, and recovery must be a button, not a runbook. RDS Multi-AZ delivers exactly that under a 99.95% SLA — a ~35× TCO penalty argument against every self-managed alternative once labor is priced honestly.</p>
+          <span class="money">~$263/mo on-demand → ~$171/mo on 1-year RI</span>
+        </div>
+
+        <div class="card">
+          <span class="label">Admin IA</span>
+          <p class="thesis">Progressive Convergence. Ship net-new value in the admin app in ~2 weeks; migrate console SYSTEM pages in waves behind a per-page feature flag.</p>
+          <p class="why">The only proposal that ships user-visible value fast <em>and</em> commits to the correct end state — zero SYSTEM-only pages in console — without the ten-engineer-week upfront bill of a big-bang migration. Every migration is individually revertible.</p>
+          <span class="money">P1 in ~2 weeks · full convergence by week 12</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <b>Precedent set this session.</b> The Agents-tab migration (admin PR #7, console PR #164) is the first wave of Progressive Convergence in flight — it's how every subsequent SYSTEM page should move. Console keeps the file on disk for one release cycle so a stale bookmark hits a friendly not-found; nav entry + route are pulled the moment the admin tab is live.
+      </div>
+    </section>
+
+    <!-- ================================================================ -->
+    <section id="database">
+      <span class="eyebrow">02 · Database strategy</span>
+      <h2>Eight options were priced. One is the answer.</h2>
+      <p>The honest answer for a production SaaS at this scale is: <b>stay on RDS Postgres, but stop pretending Single-AZ t4g burstable is a production posture.</b> The compute-vs-labor math against self-managed alternatives is decisive — infra numbers look cheaper, all-in numbers are 15–20× worse once senior-SRE time is priced. The modern-managed category (Neon, Supabase, Crunchy, Timescale) is real but structurally more expensive at this scale unless we're paying for something they uniquely bundle.</p>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Option</th>
+              <th>Monthly</th>
+              <th>Ops burden</th>
+              <th>Verdict</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="pick">
+              <td class="opt">RDS PostgreSQL <span class="sub">db.m6g.large Multi-AZ · gp3 · 30d PITR</span></td>
+              <td class="price">$263<span class="sub">or $171 on 1yr RI</span></td>
+              <td>~2 hrs/mo · &lt;$300</td>
+              <td><span class="pill p1">Pick</span></td>
+              <td>Managed failover 60–120 s, PITR is one API call, Blue/Green for majors. AWS is on the hook at 3am.</td>
+            </tr>
+            <tr>
+              <td class="opt">Aurora PostgreSQL <span class="sub">r6g.large writer + reader · 100 GB</span></td>
+              <td class="price">$443<span class="sub">baseline</span></td>
+              <td>~2 hrs/mo · &lt;$300</td>
+              <td><span class="pill p2">Defer</span></td>
+              <td>Sub-30 s RTO + readable replica cost $180/mo more for benefits not yet needed. Right answer at 500 GB or on a tighter SLA.</td>
+            </tr>
+            <tr>
+              <td class="opt">Self-managed EC2 <span class="sub">Patroni 3-node · WAL-G to S3</span></td>
+              <td class="price">$332<span class="sub">infra · $4.8k labor</span></td>
+              <td>~40 hrs/mo · $4,800</td>
+              <td><span class="pill open">Skip</span></td>
+              <td>Saves ~$70–130/mo on infra, costs $4,500/mo more all-in. Break-even needs a dedicated Postgres SRE.</td>
+            </tr>
+            <tr>
+              <td class="opt">In-cluster CNPG <span class="sub">3× on shared EKS · Barman to S3</span></td>
+              <td class="price">$95–310<span class="sub">infra · $4.3k labor</span></td>
+              <td>~36 hrs/mo · $4,320</td>
+              <td><span class="pill open">Skip</span></td>
+              <td>Forced Barman-plugin migration in 2026; zonal-EBS gotcha turns node evictions into 15–30 min outages. Only wins amortizing across many instances.</td>
+            </tr>
+            <tr>
+              <td class="opt">Crunchy Bridge <span class="sub">Standard-8 HA · same region</span></td>
+              <td class="price">$290<span class="sub">→ $890 at 500 GB + replica</span></td>
+              <td>~2 hrs/mo</td>
+              <td><span class="pill p2">Defer</span></td>
+              <td>Cleanest match to the "boring Postgres" brief after RDS — free egress, PgBouncer bundled, superuser. Lose only for lack of one-throat-to-choke with AWS.</td>
+            </tr>
+            <tr>
+              <td class="opt">Neon Scale <span class="sub">2 CU always-on · PrivateLink</span></td>
+              <td class="price">$360<span class="sub">→ $835 at 500 GB</span></td>
+              <td>~2 hrs/mo</td>
+              <td><span class="pill p2">Defer</span></td>
+              <td>Real branching for CI/preview envs is a genuine productivity win. May 2025 control-plane fragility knocks it behind Crunchy for prod.</td>
+            </tr>
+            <tr>
+              <td class="opt">Supabase Team <span class="sub">Team + Small · PITR add-on</span></td>
+              <td class="price">$725<span class="sub">→ $1,067 with replica</span></td>
+              <td>~2 hrs/mo</td>
+              <td><span class="pill open">Skip</span></td>
+              <td>$599 Team floor makes it structurally uncompetitive as pure DB. Only worth it if we're retiring in-house auth or realtime onto their stack.</td>
+            </tr>
+            <tr>
+              <td class="opt">Timescale Cloud <span class="sub">Performance HA</span></td>
+              <td class="price">$330–370<span class="sub">→ $1,050+ at scale</span></td>
+              <td>~2 hrs/mo</td>
+              <td><span class="pill open">Skip</span></td>
+              <td>Paying the Timescale premium for an extension we don't call. Wrong tool at this scale.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>When we reconsider</h3>
+      <p>These are the conditions that flip the decision. None are true yet. All are worth setting an alert on.</p>
+      <ul class="triggers">
+        <li>
+          <span class="when">Aurora when</span>
+          <span class="then">data crosses ~500 GB, or SLA tightens to &lt;60 s RTO, or Blue/Green upgrades become routine.</span>
+        </li>
+        <li>
+          <span class="when">Crunchy when</span>
+          <span class="then">AWS egress-to-app becomes a line item, we want superuser + a smaller vendor's support bench, and we don't need branching.</span>
+        </li>
+        <li>
+          <span class="when">Neon when</span>
+          <span class="then">per-PR preview DBs would meaningfully accelerate the team AND we're willing to accept 2025-era control-plane risk.</span>
+        </li>
+        <li>
+          <span class="when">Self-managed when</span>
+          <span class="then">a dedicated Postgres SRE joins (sunk-cost time), or RDS blocks a load-bearing extension (TimescaleDB OSS, custom C), or data clears ~2–3 TB.</span>
+        </li>
+      </ul>
+
+      <div class="caveat">
+        <b>Untested claim:</b> the current live RDS instance class and IOPS profile were not verified from the console. Confirm real Performance Insights numbers before committing to m6g.large — the recommendation assumes low-hundreds QPS, &lt;200 GB, no sustained IOPS saturation. Also: <b>quarterly PITR restore-to-scratch drill</b> goes on the calendar. AWS does not test your backups for you, and an untested backup is not a backup.
+      </div>
+    </section>
+
+    <!-- ================================================================ -->
+    <section id="ia">
+      <span class="eyebrow">03 · Admin dashboard IA</span>
+      <h2>Thirteen sections. Six ship in P1.</h2>
+      <p>The picked approach — Progressive Convergence — is additive first (P1), then converges console SYSTEM pages in waves (P2–P3). It absorbs the aws-dashboard rename and its existing Services/Access/Cluster/Compute tabs rather than pretending they don't exist. Every migrated page is behind a per-page feature flag <code>dashboardOwns.&lt;pageKey&gt;</code>.</p>
+
+      <div class="ia-map">
+        <div class="ia-row">
+          <span class="idx">01</span>
+          <div>
+            <div class="name">Overview</div>
+            <div class="desc">Health tiles · today's spend · agent alerts · recent SYSTEM audit · quick-links to unmigrated console pages.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p1">P1</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">02</span>
+          <div>
+            <div class="name">Cost</div>
+            <div class="desc">By Account · By Project · By Service class (kpack vs kn vs DB vs Daari LLM). AWS-tag reconciliation P2.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p1">P1</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">03</span>
+          <div>
+            <div class="name">Accounts (cross-tenant)</div>
+            <div class="desc">All accounts list · detail · health-per-tenant. CRUD, impersonation, invitations ops → P2.</div>
+          </div>
+          <span class="pill mig">Migrated</span>
+          <span class="pill p1">P1 RO</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">04</span>
+          <div>
+            <div class="name">Administration</div>
+            <div class="desc">Platform config · feature flags · system defaults (BP_NODE_VERSION pin, plan templates) · maintenance kill-switches.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p1">P1</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">05</span>
+          <div>
+            <div class="name">Incidents &amp; On-Call</div>
+            <div class="desc">Open/ack/resolved · agent auto-creation · runbook attach · single rotation v1.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">06</span>
+          <div>
+            <div class="name">Agents &amp; Automation</div>
+            <div class="desc">7-agent status board · last-run/issues/false-positive · API_TOKEN wiring UI. <b>Already in flight</b> — PR #7.</div>
+          </div>
+          <span class="pill mig">Migrated</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">07</span>
+          <div>
+            <div class="name">Audit</div>
+            <div class="desc">Global audit log · SYSTEM-only slice · impersonation trail · config-change diffs.</div>
+          </div>
+          <span class="pill mig">Migrated</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">08</span>
+          <div>
+            <div class="name">Platform Infrastructure</div>
+            <div class="desc">Clusters · Stacks · Stores · Builders + safety-drift. aws-dashboard native tabs embedded P1, absorbed P2.</div>
+          </div>
+          <span class="pill emb">Embedded → migrated</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">09</span>
+          <div>
+            <div class="name">Credentials &amp; Secrets</div>
+            <div class="desc">Git-creds health · expiring-14d list · secret &amp; SA inspector. Rotation actions in P2.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p1">P1</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">10</span>
+          <div>
+            <div class="name">Daari (LLM Gateway Ops)</div>
+            <div class="desc">Gateway health · upstream provider status · per-account LLM spend. Per-account view stays in console.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">11</span>
+          <div>
+            <div class="name">Diagnostics &amp; Reliability</div>
+            <div class="desc">kpack safety-drift live view · control-ns pod health · wedged-build finder · SLO board (P2).</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p1">P1</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">12</span>
+          <div>
+            <div class="name">Growth Analytics</div>
+            <div class="desc">Signup funnel · activation · WoW/MoM retention · product-usage per account · cohort by signup week.</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p2">P2</span>
+        </div>
+        <div class="ia-row">
+          <span class="idx">13</span>
+          <div>
+            <div class="name">Staff Tools</div>
+            <div class="desc">JWT decoder + short-lived SYSTEM JWT minter · c2a CLI docs mirror · incident-capture bundle · kubectl-lite (whitelisted).</div>
+          </div>
+          <span class="pill new">New</span>
+          <span class="pill p3">P3</span>
+        </div>
+      </div>
+
+      <p style="font-size:12.5px;color:var(--meta);margin-top:20px;">
+        Legend: <span class="pill new">New</span> built fresh · <span class="pill mig">Migrated</span> moved from console (cutover-flagged) · <span class="pill emb">Embedded</span> route-mounted from aws-dashboard until reabsorbed. Priority phases <span class="pill p1">P1</span>, <span class="pill p2">P2</span>, <span class="pill p3">P3</span>.
+      </p>
+    </section>
+
+    <!-- ================================================================ -->
+    <section id="rollout">
+      <span class="eyebrow">04 · Rollout &amp; P1 punch list</span>
+      <h2>What happens in what order.</h2>
+      <p>Four phases; each is bounded, individually revertible, and gates the next. Phase 0 is halfway done — the aws-dashboard rename to admin.clue2.app happened this session, along with the Google-OAuth edge + FastAPI BFF holding the SYSTEM JWT server-side. What remains is DNS at the apex and finishing the Daari secrets-binding path.</p>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="name">Phase 0 · Rehome</span>
+          <span class="when">Week 1 · in flight</span>
+        </div>
+        <ul>
+          <li>Repo rename <code>aws-dashboard</code> → <code>platform-admin-dashboard</code></li>
+          <li>Deploy at <code>admin.clue2.app</code> in <code>control</code> namespace, reusing <code>core-sa</code> and <code>aws-iam-credentials</code></li>
+          <li>Legacy <code>aws-dashboard.clue2.app</code> 301 redirect for 90 days</li>
+          <li>Google-OAuth at edge, <code>@clue2solve.com</code> allowlist</li>
+          <li>FastAPI BFF holds long-lived SYSTEM JWT server-side — frontend never sees it</li>
+          <li>Emergency-admin kubectl-secret break-glass path in BFF</li>
+          <li>Cookie <code>Domain=.clue2.app</code> for cross-surface SSO with console</li>
+        </ul>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="name">Phase 1 · Ship net-new</span>
+          <span class="when">Weeks 1–2</span>
+        </div>
+        <ul>
+          <li>Ship P1 sections: Overview · Cost · Accounts (RO) · Administration · Credentials health · Diagnostics</li>
+          <li>Embed aws-dashboard Services/Access/Cluster/Compute tabs as route-mounts under Platform Infrastructure — nothing regresses</li>
+          <li>Zero console changes except one link at top of SYSTEM nav</li>
+          <li>Explicit security review at end of P1: every BFF route asserts <code>user_type=SYSTEM</code>, cross-account queries can't leak, impersonation design signed off before P2 build</li>
+        </ul>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="name">Phase 2 · First migration wave</span>
+          <span class="when">Weeks 3–6 · per-page cutover</span>
+        </div>
+        <ul>
+          <li>Pages: Accounts CRUD · Agents · Audit · KubernetesClusters · ClusterStacks · ClusterStores · Builders · PlatformLimits. aws-dashboard tabs absorbed as first-class</li>
+          <li>Per-page cutover cycle (~4 weeks each, staggered): <b>parity build</b> → <b>both-live</b> (staff dogfood, external still on console) → <b>flip</b> (console soft-redirect banner with query string preserved) → <b>delete</b> (git rm + nginx 301)</li>
+          <li>Reversal at any stage: flip flag false → console page reappears. Deleted-code recovery within 2-week cooldown via git revert</li>
+          <li>Extract shared <code>@clue2/console-ui</code> package (~3 days scaffolding) to prevent React duplication drift</li>
+        </ul>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="name">Phase 3 · Second wave + new surfaces</span>
+          <span class="when">Weeks 7–12</span>
+        </div>
+        <ul>
+          <li>Wave 2 migrations: ServiceAccounts · ManageDb · Domains · Registries · VPN · Daari SYSTEM surfaces · Heal-agent apply UI</li>
+          <li>Ship P2 new: Incidents &amp; On-Call · Growth Analytics · Cost forecast + anomalies · AWS-tag reconciliation · SLO board</li>
+          <li>Ship P3 new: Staff Tools · declarative control-ns config editor (fixes Platform Config Gap via git-backed source + ArgoCD) · GitHub App migration cutover console · dependency-catalog probes</li>
+          <li><b>End state:</b> <code>console/src/helpers/constants.js</code> no longer imports <code>USER_TYPE_SYSTEM</code>. Zero <code>hasPermission(["SYSTEM"])</code> blocks in console. Feature-flag cleanup pass deletes all <code>dashboardOwns.*</code> flags</li>
+        </ul>
+      </div>
+
+      <h3 style="margin-top:36px;">P1 launch — the checklist</h3>
+      <div class="checklist">
+        <h3>Infrastructure &amp; auth</h3>
+        <ul>
+          <li class="done">Repo renamed <code>aws-dashboard</code> → admin app; deployed at admin.control.apps.clue2.app</li>
+          <li class="done">Google-OAuth at edge, @clue2solve.com allowlist</li>
+          <li class="done">FastAPI BFF mints/holds SYSTEM JWT server-side; frontend never sees it</li>
+          <li>DNS: <code>admin.clue2.app</code> CNAMEs at whoever hosts apex clue2.app</li>
+          <li><code>aws-dashboard.clue2.app</code> 301 → <code>admin.clue2.app</code> (90-day)</li>
+          <li>Cookie <code>Domain=.clue2.app</code> for cross-surface SSO</li>
+          <li>Emergency-admin kubectl-secret break-glass path in BFF</li>
+          <li>Security review sign-off: every BFF route asserts <code>user_type=SYSTEM</code></li>
+          <li class="done">One-line console change: link to admin dashboard at top of SYSTEM nav (deferred one release)</li>
+        </ul>
+
+        <h3>Tab 1 · Overview</h3>
+        <ul>
+          <li><code>GET core /api/v1/k8s/services/health</code> — control-ns pods tile</li>
+          <li><code>GET core /api/v1/k8s/images/safety-drift</code> — kpack drift tile</li>
+          <li><code>GET core /api/v1/k8s/creds/scan</code> — git-creds health tile</li>
+          <li>New: <code>GET /api/v1/platform/spend/today</code> — today's spend + 7d/30d</li>
+          <li><code>GET /api/v1/agents/status</code> — active alerts</li>
+          <li><code>GET /api/v1/audit?limit=20&amp;system_only=true</code> — recent events</li>
+          <li>Static quick-links panel to unmigrated console SYSTEM pages</li>
+        </ul>
+
+        <h3>Tab 2 · Cost</h3>
+        <ul>
+          <li>New: <code>GET /api/v1/platform/cost/by-account</code></li>
+          <li>New: <code>GET /api/v1/platform/cost/by-project?accountId=</code></li>
+          <li>New: <code>GET /api/v1/platform/cost/by-service-class</code> (kpack / kn-runtime / DB / Daari-LLM)</li>
+          <li>Data: <code>BuildMetricsWatcher</code> CCU rows already joined with <code>account_id</code>/<code>project_id</code></li>
+          <li>Graceful degradation to project-only if V32 hasn't populated <code>account_id</code></li>
+        </ul>
+
+        <h3>Tab 3 · Accounts (read-only in P1)</h3>
+        <ul>
+          <li><code>GET /api/v1/accounts</code> — list, sort by CCU/last-active</li>
+          <li><code>GET /api/v1/accounts/{id}</code> — projects, members, quota vs usage</li>
+          <li>Deep-link out to <code>console.clue2.app/account?id=</code> for CRUD until P2</li>
+        </ul>
+
+        <h3>Tab 4 · Administration</h3>
+        <ul>
+          <li><code>GET/PUT /api/v1/platform/config</code> — env-var registry per control-ns service</li>
+          <li><code>GET/PUT /api/v1/platform/flags</code> — feature flags (global + per-account), typed schema</li>
+          <li><code>GET/PUT /api/v1/platform/defaults</code> — BP_NODE_VERSION pin, plan templates</li>
+          <li><code>POST /api/v1/platform/maintenance</code> — banner toggle + kill-switches</li>
+          <li>Every mutation writes <code>K8sAuditController</code> event with author + before/after diff</li>
+        </ul>
+
+        <h3>Tab 5 · Credentials &amp; Secrets (Platform)</h3>
+        <ul>
+          <li><code>GET core /api/v1/k8s/creds/scan</code> — control-services-git-creds health + expiring-14d</li>
+          <li><code>GET core /api/v1/k8s/health/secrets/:ns/:name</code> — secret inspector</li>
+          <li><code>GET core /api/v1/k8s/health/sa/:ns/:name</code> — SA inspector</li>
+          <li>Read-only surfaces. Rotate action ships in P2</li>
+        </ul>
+
+        <h3>Tab 6 · Diagnostics</h3>
+        <ul>
+          <li><code>GET core /api/v1/k8s/images/safety-drift</code> — safety-drift with copy-paste kubectl fix per Image</li>
+          <li><code>GET core /api/v1/k8s/services/health</code> — control-ns service health</li>
+        </ul>
+
+        <h3>Tab 7 · Platform Infrastructure (embedded in P1)</h3>
+        <ul>
+          <li>aws-dashboard tabs (Services / Access / Cluster / Compute) mounted as routes under this section — no rebuild</li>
+        </ul>
+
+        <h3>Explicit non-scope for P1</h3>
+        <ul>
+          <li>Accounts CRUD, impersonation, invitations UI → P2</li>
+          <li>Agents / Audit / Cluster Stacks / Stores / Builders migration → P2</li>
+          <li>Incidents, Growth Analytics, anomalies, forecasting → P2</li>
+          <li>Staff Tools, heal-agent apply, declarative control-ns config editor → P3</li>
+          <li>Any deletion of console pages → P2 at earliest, per cutover mechanic</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ================================================================ -->
+    <section id="open">
+      <span class="eyebrow">05 · Open questions</span>
+      <h2>Twelve decisions still on you.</h2>
+      <p>Recommendations in <b>bold</b>. None of these block P1; each shapes P2 or later.</p>
+
+      <ol class="questions">
+        <li><b>Namespace placement:</b> dashboard in <code>control</code> (shares core-sa + aws-iam-credentials) or new <code>admin</code> namespace (cleaner tenancy boundary)? <em>Recommend control for P1 with a note to revisit at P3.</em></li>
+        <li><b>Impersonation model:</b> scoped short-lived JWT for act-as (useful, higher blast radius) vs read-only view-as (safer, less useful)? Require a second SYSTEM user to co-sign, or ship v1 solo-approved with audit-only? <em>Recommend view-as v1, act-as v2 with co-sign.</em></li>
+        <li><b>Feature flags:</b> in-house table (2 days, capability-limited) vs LaunchDarkly/OpenFeature/Flagsmith (fast to prod, slower to add)? <em>Recommend in-house for P1, revisit if flag count &gt; 50.</em></li>
+        <li><b>Incidents section:</b> own tracker vs integrate PagerDuty/Opsgenie/incident.io? <em>Recommend own for v1 — small team, rabbit hole risk on the integration.</em></li>
+        <li><b>AWS cost granularity:</b> Cost Explorer (daily, 30d lag, easy) vs AWS CUR (hourly, S3+Athena pipeline, correct-long-term)? <em>Recommend Cost Explorer for P1, CUR when forecasting shipped.</em></li>
+        <li><b>Console /costs and /metrics tiles:</b> stay as per-account customer views, or delete because Account settings covers it? <em>Recommend stay — different audience (customer vs staff).</em></li>
+        <li><b>Invitation-flow operator wizard</b> (PRs 2/3/4 pending): build against console or admin? <em>Recommend admin — belongs with staff — but delays it if P1 slips.</em></li>
+        <li><b>Feature-flag flip granularity:</b> per-user (staff dogfoods one week ahead, doubles QA matrix) or global only? <em>Recommend per-user for staff, global for external — cost is one extra query on flag read.</em></li>
+        <li><b>Declarative control-ns config editor</b> (P3): write to coordinator via API, or git repo + ArgoCD reconcile? <em>Git + ArgoCD is the right fix for the Platform Config Gap; adds ~3 weeks to P3.</em></li>
+        <li><b>Runbook execution UI</b> (heal wedged kpack, rotate expired PAT): one-click buttons in the dashboard vs CLI-only? <em>Recommend buttons with dry-run + audit — discoverability wins.</em></li>
+        <li><b>aws-dashboard tab renames</b> when absorbed at P2 (Services/Access/Cluster/Compute): rethemed or preserved verbatim for muscle memory? <em>Recommend preserve. Bookmark churn isn't worth the tidy.</em></li>
+        <li><b>Console soft-redirect banners:</b> sunset at 6 months (less code) or keep forever (nicer UX)? <em>Recommend 6-month sunset per page, tracked in cutover ticket.</em></li>
+      </ol>
+    </section>
+
+    <!-- ================================================================ -->
+    <section id="ledger">
+      <span class="eyebrow">06 · Shipped this session</span>
+      <h2>What actually landed while we were figuring this out.</h2>
+      <p>The rollout above depends on none of these — but they're the concrete state everything else builds on.</p>
+
+      <h3>PRs opened or merged</h3>
+      <div class="prs">
+        <div class="pr">
+          <span class="repo">coordinator</span>
+          <span class="title">JIT P1 — V42 <code>jit_access_grants</code> schema + <code>PermissionService.hasCustomerAccess</code></span>
+          <span class="num">#184</span>
+        </div>
+        <div class="pr">
+          <span class="repo">aws-dashboard</span>
+          <span class="title">Agents tab in admin (first Progressive Convergence wave) + <code>&lt;title&gt;</code> rebrand</span>
+          <span class="num">#7</span>
+        </div>
+        <div class="pr">
+          <span class="repo">console</span>
+          <span class="title">Remove SYSTEM-only Agents page (moved to admin)</span>
+          <span class="num">#164</span>
+        </div>
+        <div class="pr">
+          <span class="repo">console</span>
+          <span class="title">Restore <code>state.from</code> redirect after SSO login</span>
+          <span class="num">#163 merged</span>
+        </div>
+        <div class="pr">
+          <span class="repo">console</span>
+          <span class="title"><code>/sso-handoff</code> route for cross-app c2a SSO</span>
+          <span class="num">#162 merged</span>
+        </div>
+        <div class="pr">
+          <span class="repo">aws-dashboard</span>
+          <span class="title">Rebrand to Platform Admin + domain</span>
+          <span class="num">#2 merged</span>
+        </div>
+        <div class="pr">
+          <span class="repo">aws-dashboard</span>
+          <span class="title">Cost top-resources 14d/DAILY fix + EKS <code>/connect</code> returns 501</span>
+          <span class="num">#6 merged</span>
+        </div>
+        <div class="pr">
+          <span class="repo">aws-dashboard</span>
+          <span class="title">Ship built frontend under backend/static/ (temp until BE/FE split)</span>
+          <span class="num">#5 merged</span>
+        </div>
+      </div>
+
+      <h3>Other things that landed</h3>
+      <ul>
+        <li>RDS: automated 30-day daily backups + deletion protection + milestone snapshot</li>
+        <li>RBAC seed: renamed <em>System Account → Platform</em>, <em>Default Group → All Members</em>, added Account Admins group per account</li>
+        <li>admin.control.apps.clue2.app live with SPA + API (AWS creds via envFrom fallback, since <code>c2a daari bind</code> is broken)</li>
+        <li>Platform principle locked: <b>every c2a app auto-gets project-style DNS; custom domain opt-in on top; both routes work</b></li>
+      </ul>
+
+      <h3>Follow-ups still owed</h3>
+      <ul>
+        <li>Fix <code>c2a daari secrets bind</code> — creates in wrong namespace + doesn't plumb to <code>C2A_SYSTEM_ENV</code>. Same class of bug as <code>c2a llm bind</code>.</li>
+        <li>Once bind fixed: migrate admin's k8s Secret + envFrom back onto Daari</li>
+        <li>Create scoped IAM user for admin app (ce/ec2/eks/identitystore/rgtag read-only), rotate broad <code>c2s-admin</code> key</li>
+        <li>Add <code>admin.clue2.app</code> CNAMEs at whoever hosts apex clue2.app</li>
+        <li>Rebuild admin after PR #7 merges to pick up the <code>&lt;title&gt;</code> rebrand</li>
+        <li>Add SYSTEM to the <code>RoleType</code> Java enum and re-seed the System Admin role/group (auth-poisoning incident this session was the missing enum value)</li>
+        <li>Feature: commit SHA / message / author / PR link on each Build row + compare-with-previous-build</li>
+        <li>Cleanup PR: <code>git rm</code> <code>console/src/pages/Agents.js</code> + <code>components/AgentAlertsPanel.js</code> after one release cycle</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+</body>
+</html>
