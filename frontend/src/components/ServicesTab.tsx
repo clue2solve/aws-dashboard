@@ -12,6 +12,7 @@ import {
 import { motion } from 'framer-motion'
 import StorageIcon from '@mui/icons-material/Storage'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
+import { apiFetch } from '../api'
 
 interface Service {
   name: string
@@ -31,12 +32,19 @@ const serviceIcons: Record<string, string> = {
   'Amazon Relational Database Service': 'RDS',
   'Amazon Elastic Load Balancing': 'ELB',
   'Amazon Virtual Private Cloud': 'VPC',
-  'EC2 - Other': 'EC2',
+  'EC2 - Other': 'EC2 Other',
   'Amazon EC2 Container Registry (ECR)': 'ECR',
   'Amazon Lightsail': 'Lightsail',
   'Amazon Route 53': 'Route53',
   'AmazonCloudWatch': 'CloudWatch',
   'Amazon Elastic File System': 'EFS',
+}
+
+// Services that can navigate to specific tabs
+const navigableServices: Record<string, number> = {
+  'EC2': 1,       // Compute tab
+  'EC2 Other': 1, // Compute tab
+  'EKS': 3,       // Clusters tab (Cost tab inserted at index 2)
 }
 
 const container = {
@@ -54,7 +62,11 @@ const item = {
   show: { opacity: 1, y: 0 },
 }
 
-function ServicesTab() {
+interface ServicesTabProps {
+  onNavigateToTab?: (tabIndex: number) => void
+}
+
+function ServicesTab({ onNavigateToTab }: ServicesTabProps) {
   const [services, setServices] = useState<Service[]>([])
   const [resources, setResources] = useState<Resource[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,8 +76,8 @@ function ServicesTab() {
     const fetchData = async () => {
       try {
         const [servicesRes, resourcesRes] = await Promise.all([
-          fetch('/api/services'),
-          fetch('/api/resources'),
+          apiFetch('/api/services'),
+          apiFetch('/api/resources'),
         ])
 
         const servicesData = await servicesRes.json()
@@ -133,53 +145,84 @@ function ServicesTab() {
           {services.map((service) => (
             <Grid item xs={12} sm={6} md={4} lg={3} key={service.name}>
               <motion.div variants={item}>
-                <Card
-                  sx={{
-                    height: '100%',
-                    transition: 'transform 0.2s, box-shadow 0.2s',
-                    '&:hover': {
-                      transform: 'translateY(-4px)',
-                      boxShadow: 4,
-                    },
-                  }}
-                >
-                  <CardContent>
-                    <Box
+                {(() => {
+                  const serviceLabel = serviceIcons[service.name] || 'AWS'
+                  const isNavigable = serviceLabel in navigableServices
+
+                  return (
+                    <Card
                       sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'flex-start',
-                        mb: 1,
+                        height: '100%',
+                        transition: 'transform 0.2s, box-shadow 0.2s',
+                        cursor: isNavigable ? 'pointer' : 'default',
+                        border: isNavigable ? '2px solid' : undefined,
+                        borderColor: isNavigable ? 'primary.main' : undefined,
+                        '&:hover': {
+                          transform: 'translateY(-4px)',
+                          boxShadow: 4,
+                        },
+                      }}
+                      onClick={() => {
+                        if (isNavigable && onNavigateToTab) {
+                          onNavigateToTab(navigableServices[serviceLabel])
+                        }
                       }}
                     >
-                      <Chip
-                        label={serviceIcons[service.name] || 'AWS'}
-                        size="small"
-                        color="secondary"
-                        sx={{ fontWeight: 600 }}
-                      />
-                      <Chip
-                        label={`$${service.cost.toFixed(2)}`}
-                        size="small"
-                        variant="outlined"
-                      />
-                    </Box>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        fontWeight: 500,
-                        mt: 1,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                      }}
-                    >
-                      {service.name}
-                    </Typography>
-                  </CardContent>
-                </Card>
+                      <CardContent>
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            mb: 1,
+                          }}
+                        >
+                          <Chip
+                            label={serviceLabel}
+                            size="small"
+                            color={isNavigable ? 'primary' : 'secondary'}
+                            sx={{ fontWeight: 600 }}
+                          />
+                          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                            <Chip
+                              label={`$${service.cost.toFixed(2)}`}
+                              size="small"
+                              variant="outlined"
+                            />
+                            {isNavigable && (
+                              <Chip
+                                label="→"
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                sx={{ minWidth: 28 }}
+                              />
+                            )}
+                          </Box>
+                        </Box>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 500,
+                            mt: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                          }}
+                        >
+                          {service.name}
+                        </Typography>
+                        {isNavigable && (
+                          <Typography variant="caption" color="primary" sx={{ mt: 0.5, display: 'block' }}>
+                            Click to view clusters
+                          </Typography>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )
+                })()}
               </motion.div>
             </Grid>
           ))}

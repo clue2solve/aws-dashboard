@@ -68,6 +68,7 @@ import HistoryIcon from '@mui/icons-material/History'
 import RestartAltIcon from '@mui/icons-material/RestartAlt'
 import TuneIcon from '@mui/icons-material/Tune'
 import CloseIcon from '@mui/icons-material/Close'
+import { apiFetch } from '../api'
 
 const API_BASE = 'http://localhost:54321/api'
 
@@ -353,6 +354,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   })
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandSearch, setCommandSearch] = useState('')
+  const [commandSelectedIndex, setCommandSelectedIndex] = useState(0)
   const [helpOpen, setHelpOpen] = useState(false)
   const [eventsModalOpen, setEventsModalOpen] = useState(false)
   const [nodesModalOpen, setNodesModalOpen] = useState(false)
@@ -463,8 +465,8 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setEksLoading(true)
     try {
       const [clustersRes, costsRes] = await Promise.all([
-        fetch('/api/eks/clusters'),
-        fetch('/api/eks/costs-summary'),
+        apiFetch('/api/eks/clusters'),
+        apiFetch('/api/eks/costs-summary'),
       ])
 
       const clustersData = await clustersRes.json()
@@ -477,7 +479,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
       // Fetch upgrade status for each cluster
       const clusters = clustersData.clusters || []
       const upgradePromises = clusters.map((c: EksCluster) =>
-        fetch(`/api/eks/clusters/${c.name}/upgrade-status`).then((r) => r.json())
+        apiFetch(`/api/eks/clusters/${c.name}/upgrade-status`).then((r) => r.json())
       )
       const upgradeResults = await Promise.all(upgradePromises)
 
@@ -498,7 +500,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   const handleConnectToCluster = async (clusterName: string) => {
     setConnecting(true)
     try {
-      const response = await fetch(`/api/eks/clusters/${clusterName}/connect`, {
+      const response = await apiFetch(`/api/eks/clusters/${clusterName}/connect`, {
         method: 'POST',
       })
 
@@ -511,7 +513,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
       setSelectedEksCluster(clusterName)
 
       // Fetch namespaces for the connected cluster
-      const nsResponse = await fetch(`/api/clusters/${clusterName}/namespaces`)
+      const nsResponse = await apiFetch(`/api/clusters/${clusterName}/namespaces`)
       const nsData = await nsResponse.json()
       setNamespaces(nsData.namespaces || [])
       setSelectedNamespace('__all__')
@@ -535,7 +537,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
       const rt = RESOURCE_TYPES.find((r) => r.key === resourceType)
       if (!rt) return
 
-      const response = await fetch(`/api/clusters/${clusterName}/${rt.endpoint}`)
+      const response = await apiFetch(`/api/clusters/${clusterName}/${rt.endpoint}`)
       const data = await response.json()
       setResources(data[rt.dataKey] || [])
     } catch (err) {
@@ -556,7 +558,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setEventsModalOpen(true)
     setModalLoading(true)
     try {
-      const response = await fetch(`/api/clusters/${selectedEksCluster}/all-events`)
+      const response = await apiFetch(`/api/clusters/${selectedEksCluster}/all-events`)
       const data = await response.json()
       setModalEvents(data.events || [])
     } catch (err) {
@@ -570,7 +572,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setNodesModalOpen(true)
     setModalLoading(true)
     try {
-      const response = await fetch(`/api/clusters/${selectedEksCluster}/nodes`)
+      const response = await apiFetch(`/api/clusters/${selectedEksCluster}/nodes`)
       const data = await response.json()
       setModalNodes(data.nodes || [])
     } catch (err) {
@@ -582,7 +584,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
 
   const fetchScalingStatus = async (clusterName: string) => {
     try {
-      const response = await fetch(`/api/eks/clusters/${clusterName}/scaling-status`)
+      const response = await apiFetch(`/api/eks/clusters/${clusterName}/scaling-status`)
       const data = await response.json()
       setScalingStatus(prev => ({ ...prev, [clusterName]: data }))
     } catch (err) {
@@ -603,7 +605,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setStopConfirmOpen(false)
     setScalingAction(true)
     try {
-      const response = await fetch(`/api/eks/clusters/${clusterToStop}/scale-down`, { method: 'POST' })
+      const response = await apiFetch(`/api/eks/clusters/${clusterToStop}/scale-down`, { method: 'POST' })
       const data = await response.json()
       if (data.success) {
         setSnackbar({ open: true, message: `Scaling down ${clusterToStop}...`, severity: 'success' })
@@ -624,7 +626,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   const handleScaleUp = async (clusterName: string) => {
     setScalingAction(true)
     try {
-      const response = await fetch(`/api/eks/clusters/${clusterName}/scale-up`, { method: 'POST' })
+      const response = await apiFetch(`/api/eks/clusters/${clusterName}/scale-up`, { method: 'POST' })
       const data = await response.json()
       if (data.success) {
         setSnackbar({ open: true, message: `Scaling up ${clusterName}...`, severity: 'success' })
@@ -704,8 +706,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setLogsContent('')
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/pods/${resource.namespace}/${resource.name}/logs?previous=${previous}&tail=500`
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/pods/${resource.namespace}/${resource.name}/logs?previous=${previous}&tail=500`
       )
       const data = await response.json()
       setLogsContent(data.error || data.logs || 'No logs available')
@@ -724,8 +725,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setDescribeContent('')
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/describe`
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/describe`
       )
       const data = await response.json()
       setDescribeContent(data.error || data.describe || 'No description available')
@@ -744,8 +744,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setYamlContent('')
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/yaml`
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${resource.namespace}/${resource.name}/yaml`
       )
       const data = await response.json()
       setYamlContent(data.error || data.yaml || 'No YAML available')
@@ -771,8 +770,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                           selectedResourceType === 'jobs' ? 'job' :
                           selectedResourceType === 'cronjobs' ? 'cronjob' : selectedResourceType
 
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${selectedResource.namespace}/${selectedResource.name}`,
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/resources/${resourceType}/${selectedResource.namespace}/${selectedResource.name}`,
         { method: 'DELETE' }
       )
       const data = await response.json()
@@ -799,8 +797,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                           selectedResourceType === 'statefulsets' ? 'statefulsets' :
                           selectedResourceType === 'daemonsets' ? 'daemonsets' : 'deployments'
 
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/${resourceType}/${resource.namespace}/${resource.name}/restart`,
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/${resourceType}/${resource.namespace}/${resource.name}/restart`,
         { method: 'POST' }
       )
       const data = await response.json()
@@ -823,8 +820,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setActionLoading(true)
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/deployments/${selectedResource.namespace}/${selectedResource.name}/scale?replicas=${scaleReplicas}`,
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/deployments/${selectedResource.namespace}/${selectedResource.name}/scale?replicas=${scaleReplicas}`,
         { method: 'POST' }
       )
       const data = await response.json()
@@ -847,8 +843,7 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     setActionLoading(true)
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clusters/${selectedEksCluster}/cronjobs/${resource.namespace}/${resource.name}/trigger`,
+      const response = await apiFetch(`${API_BASE}/clusters/${selectedEksCluster}/cronjobs/${resource.namespace}/${resource.name}/trigger`,
         { method: 'POST' }
       )
       const data = await response.json()
@@ -1008,13 +1003,55 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <Card>
             <CardContent sx={{ py: 1.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, flexWrap: 'wrap', gap: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <CloudIcon color="primary" />
                   <Typography variant="subtitle1" fontWeight="600">
                     AWS EKS Clusters ({eksClusters.length})
                   </Typography>
                 </Box>
+
+                {/* Cost Summary */}
+                {Object.keys(clusterCosts).length > 0 && (() => {
+                  const totalLast30Days = Object.values(clusterCosts).reduce((sum, c) => sum + (c?.last30Days || 0), 0)
+                  const totalLast7Days = Object.values(clusterCosts).reduce((sum, c) => sum + (c?.last7Days || 0), 0)
+                  const totalLastDay = Object.values(clusterCosts).reduce((sum, c) => sum + (c?.lastDay || 0), 0)
+                  const dailyRate = totalLast7Days / 7
+                  const projectedMonthly = dailyRate * 30
+
+                  return (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'grey.100', px: 2, py: 0.75, borderRadius: 2 }}>
+                      <Tooltip title="Last 24 hours">
+                        <Box sx={{ textAlign: 'center' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>24h</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLastDay.toFixed(0)}</Typography>
+                        </Box>
+                      </Tooltip>
+                      <Divider orientation="vertical" flexItem />
+                      <Tooltip title="Last 7 days">
+                        <Box sx={{ textAlign: 'center' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>7d</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLast7Days.toFixed(0)}</Typography>
+                        </Box>
+                      </Tooltip>
+                      <Divider orientation="vertical" flexItem />
+                      <Tooltip title="Last 30 days">
+                        <Box sx={{ textAlign: 'center' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>30d</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLast30Days.toFixed(0)}</Typography>
+                        </Box>
+                      </Tooltip>
+                      <Divider orientation="vertical" flexItem />
+                      <Tooltip title="Projected monthly cost based on 7-day average">
+                        <Box sx={{ textAlign: 'center', bgcolor: 'primary.main', color: 'white', px: 1.5, py: 0.5, borderRadius: 1, mx: -0.5 }}>
+                          <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.9 }}>Projected</Typography>
+                          <Typography variant="body2" fontWeight="700">${projectedMonthly.toFixed(0)}/mo</Typography>
+                        </Box>
+                      </Tooltip>
+                    </Box>
+                  )
+                })()}
+
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <Tooltip title="Keyboard shortcuts (?)">
                     <Button size="small" onClick={() => setHelpOpen(true)} startIcon={<KeyboardIcon />}>
@@ -1061,11 +1098,24 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                           </Box>
 
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Box sx={{ display: 'flex', gap: 1 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                <AttachMoneyIcon sx={{ fontSize: 12, verticalAlign: 'middle' }} />
-                                30d: {formatCost(costs?.last30Days)}
-                              </Typography>
+                            <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                              <Tooltip title="Last 30 days actual">
+                                <Typography variant="caption" color="text.secondary">
+                                  <AttachMoneyIcon sx={{ fontSize: 12, verticalAlign: 'middle' }} />
+                                  30d: {formatCost(costs?.last30Days)}
+                                </Typography>
+                              </Tooltip>
+                              {costs?.last7Days && (
+                                <Tooltip title="Projected monthly (based on 7-day avg)">
+                                  <Chip
+                                    label={`~$${((costs.last7Days / 7) * 30).toFixed(0)}/mo`}
+                                    size="small"
+                                    color="primary"
+                                    variant="outlined"
+                                    sx={{ height: 18, fontSize: '0.65rem' }}
+                                  />
+                                </Tooltip>
+                              )}
                             </Box>
                             {selectedEksCluster === cluster.name ? (
                               <Chip icon={<CheckCircleIcon />} label="Connected" color="success" size="small" sx={{ height: 20 }} />
@@ -1573,37 +1623,54 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
             fullWidth
             placeholder={commandSearch.toLowerCase().startsWith('ns') ? "Select namespace..." : "Type resource name or 'ns' for namespaces..."}
             value={commandSearch}
-            onChange={(e) => setCommandSearch(e.target.value)}
+            onChange={(e) => {
+              setCommandSearch(e.target.value)
+              setCommandSelectedIndex(0)
+            }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                // Handle namespace selection
-                if (commandSearch.toLowerCase().startsWith('ns')) {
-                  const nsSearch = commandSearch.slice(2).trim().toLowerCase()
-                  const filtered = [{ name: '__all__', label: 'All Namespaces' }, ...namespaces.map(n => ({ name: n.name, label: n.name }))]
-                    .filter(ns => !nsSearch || ns.label.toLowerCase().includes(nsSearch))
-                  if (filtered.length > 0) {
-                    setSelectedNamespace(filtered[0].name)
+              const isNsMode = commandSearch.toLowerCase().startsWith('ns')
+              const nsSearch = commandSearch.slice(2).trim().toLowerCase()
+              const nsList = [{ name: '__all__', label: 'All Namespaces' }, ...namespaces.map(n => ({ name: n.name, label: n.name }))]
+                .filter(ns => !nsSearch || ns.label.toLowerCase().includes(nsSearch))
+              const resourceList = RESOURCE_TYPES.filter(rt =>
+                !commandSearch ||
+                rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
+                rt.key.toLowerCase().includes(commandSearch.toLowerCase())
+              )
+              const currentList = isNsMode ? nsList : resourceList
+              const maxIndex = currentList.length - 1
+
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setCommandSelectedIndex(prev => Math.min(prev + 1, maxIndex))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setCommandSelectedIndex(prev => Math.max(prev - 1, 0))
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                if (isNsMode) {
+                  if (nsList.length > 0) {
+                    setSelectedNamespace(nsList[commandSelectedIndex].name)
                     setCommandPaletteOpen(false)
                     setCommandSearch('')
+                    setCommandSelectedIndex(0)
                   }
                 } else {
-                  const filtered = RESOURCE_TYPES.filter(rt =>
-                    rt.label.toLowerCase().includes(commandSearch.toLowerCase()) ||
-                    rt.key.toLowerCase().includes(commandSearch.toLowerCase())
-                  )
-                  if (filtered.length > 0) {
-                    setSelectedResourceType(filtered[0].key)
+                  if (resourceList.length > 0) {
+                    const selected = resourceList[commandSelectedIndex]
+                    setSelectedResourceType(selected.key)
                     setCommandPaletteOpen(false)
                     setCommandSearch('')
+                    setCommandSelectedIndex(0)
                     if (selectedEksCluster) {
-                      fetchResources(selectedEksCluster, filtered[0].key)
+                      fetchResources(selectedEksCluster, selected.key)
                     }
                   }
                 }
-              }
-              if (e.key === 'Escape') {
+              } else if (e.key === 'Escape') {
                 setCommandPaletteOpen(false)
                 setCommandSearch('')
+                setCommandSelectedIndex(0)
               }
             }}
             InputProps={{
@@ -1636,8 +1703,9 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                         setSelectedNamespace(ns.name)
                         setCommandPaletteOpen(false)
                         setCommandSearch('')
+                        setCommandSelectedIndex(0)
                       }}
-                      selected={selectedNamespace === ns.name || index === 0}
+                      selected={index === commandSelectedIndex}
                       sx={{ py: 1.5 }}
                     >
                       <ListItemIcon sx={{ minWidth: 40 }}>
@@ -1671,11 +1739,12 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                       setSelectedResourceType(rt.key)
                       setCommandPaletteOpen(false)
                       setCommandSearch('')
+                      setCommandSelectedIndex(0)
                       if (selectedEksCluster) {
                         fetchResources(selectedEksCluster, rt.key)
                       }
                     }}
-                    selected={selectedResourceType === rt.key || (!!commandSearch && index === 0)}
+                    selected={index === commandSelectedIndex}
                     sx={{ py: 1.5 }}
                   >
                     <ListItemIcon sx={{ minWidth: 40 }}>{rt.icon}</ListItemIcon>
@@ -1822,42 +1891,106 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
       </Dialog>
 
       {/* Help Dialog */}
-      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Keyboard Shortcuts</DialogTitle>
+      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <KeyboardIcon color="primary" />
+            Keyboard Shortcuts
+          </Box>
+          <IconButton onClick={() => setHelpOpen(false)} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
         <DialogContent>
-          <List dense>
-            <ListItem>
-              <ListItemText primary="Open resource selector" secondary="Press : to open command palette" />
-              <Chip label=":" size="small" variant="outlined" />
-            </ListItem>
-            <ListItem>
-              <ListItemText primary="Show help" secondary="Display this help dialog" />
-              <Chip label="?" size="small" variant="outlined" />
-            </ListItem>
-            <ListItem>
-              <ListItemText primary="Focus filter" secondary="Jump to filter input" />
-              <Chip label="/" size="small" variant="outlined" />
-            </ListItem>
-            <ListItem>
-              <ListItemText primary="Refresh" secondary="Reload current resources" />
-              <Chip label="r" size="small" variant="outlined" />
-            </ListItem>
-            <ListItem>
-              <ListItemText primary="Clear/Close" secondary="Clear filter or close dialogs" />
-              <Chip label="Esc" size="small" variant="outlined" />
-            </ListItem>
-            <Divider sx={{ my: 1 }} />
-            <Typography variant="subtitle2" sx={{ px: 2, py: 1 }}>
-              Resource Shortcuts
-            </Typography>
-            {RESOURCE_TYPES.map((rt) => (
-              <ListItem key={rt.key}>
-                <ListItemIcon sx={{ minWidth: 36 }}>{rt.icon}</ListItemIcon>
-                <ListItemText primary={rt.label} />
-                <Chip label={rt.shortcut} size="small" variant="outlined" />
-              </ListItem>
-            ))}
-          </List>
+          <Grid container spacing={3}>
+            {/* Navigation Column */}
+            <Grid item xs={12} md={4}>
+              <Typography variant="subtitle2" color="primary" fontWeight="600" sx={{ mb: 1.5, borderBottom: '2px solid', borderColor: 'primary.main', pb: 0.5 }}>
+                Navigation
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Command palette</Typography>
+                  <Chip label=":" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Select namespace</Typography>
+                  <Chip label=":ns" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Filter resources</Typography>
+                  <Chip label="/" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Refresh</Typography>
+                  <Chip label="r" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Help</Typography>
+                  <Chip label="?" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Close/Clear</Typography>
+                  <Chip label="Esc" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+              </Box>
+            </Grid>
+
+            {/* Resources Column */}
+            <Grid item xs={12} md={4}>
+              <Typography variant="subtitle2" color="primary" fontWeight="600" sx={{ mb: 1.5, borderBottom: '2px solid', borderColor: 'primary.main', pb: 0.5 }}>
+                Resources
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                {RESOURCE_TYPES.map((rt) => (
+                  <Box key={rt.key} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ color: 'text.secondary', display: 'flex' }}>{rt.icon}</Box>
+                      <Typography variant="body2">{rt.label}</Typography>
+                    </Box>
+                    <Chip label={rt.shortcut} size="small" sx={{ fontFamily: 'monospace', fontWeight: 600, minWidth: 28 }} />
+                  </Box>
+                ))}
+              </Box>
+            </Grid>
+
+            {/* Actions Column */}
+            <Grid item xs={12} md={4}>
+              <Typography variant="subtitle2" color="primary" fontWeight="600" sx={{ mb: 1.5, borderBottom: '2px solid', borderColor: 'primary.main', pb: 0.5 }}>
+                Resource Actions
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">View logs (pods)</Typography>
+                  <Chip label="l" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Previous logs</Typography>
+                  <Chip label="L" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Describe</Typography>
+                  <Chip label="d" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">View YAML</Typography>
+                  <Chip label="y" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Restart</Typography>
+                  <Chip label="r" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Scale</Typography>
+                  <Chip label="s" size="small" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2">Delete</Typography>
+                  <Chip label="Ctrl+D" size="small" color="error" sx={{ fontFamily: 'monospace', fontWeight: 600 }} />
+                </Box>
+              </Box>
+            </Grid>
+          </Grid>
         </DialogContent>
       </Dialog>
 
