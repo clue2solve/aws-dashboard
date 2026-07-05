@@ -18,6 +18,7 @@ import AccessTab from './components/AccessTab'
 import ClusterTab from './components/ClusterTab'
 import ComputeTab from './components/ComputeTab'
 import PlatformCostTab from './components/PlatformCostTab'
+import AgentsTab from './components/AgentsTab'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -49,8 +50,8 @@ function App() {
   const initialCluster = urlParams.get('cluster')
   const isFocusedView = !!initialCluster // Focused view when cluster param exists
 
-  // If cluster param exists, start on Clusters tab (index 3 after Cost tab was added)
-  const [tabValue, setTabValue] = useState(initialCluster ? 3 : 0)
+  // If cluster param exists, start on Clusters tab (index 4 after Agents tab was inserted at 3)
+  const [tabValue, setTabValue] = useState(initialCluster ? 4 : 0)
 
   const handleTabChange = (_: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue)
@@ -130,6 +131,7 @@ function App() {
               <Tab label="Services" />
               <Tab label="Compute" />
               <Tab label="Cost" />
+              <Tab label="Agents" />
               <Tab label="Clusters" />
               <Tab label="Users & Access" />
             </Tabs>
@@ -146,9 +148,12 @@ function App() {
           <PlatformCostTab />
         </TabPanel>
         <TabPanel value={tabValue} index={3}>
-          <ClusterTab initialCluster={null} />
+          <AgentsTab />
         </TabPanel>
         <TabPanel value={tabValue} index={4}>
+          <ClusterTab initialCluster={null} />
+        </TabPanel>
+        <TabPanel value={tabValue} index={5}>
           <AccessTab />
         </TabPanel>
       </Container>
