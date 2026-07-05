@@ -1,5 +1,5 @@
 [project]
-name = "aws-dashboard"
+name = "admin"
 version = "1.0.0"
 
 [[project.licenses]]

@@ -1,4 +1,4 @@
-# AWS Dashboard - Claude Rules
+# Platform Admin - Claude Rules
 
 ## Port Configuration
 When working on this project, always check `config.json` for port numbers before making any network-related changes.

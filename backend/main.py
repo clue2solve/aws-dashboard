@@ -36,7 +36,7 @@ IDENTITY_STORE_ID = config["aws"]["identityStoreId"]
 SSO_INSTANCE_ARN = config["aws"]["ssoInstanceArn"]
 ACCOUNT_ID = config["aws"]["accountId"]
 
-app = FastAPI(title="AWS Dashboard API", version="1.0.0")
+app = FastAPI(title="Platform Admin API", version="1.0.0")
 
 
 # Pydantic models for request bodies

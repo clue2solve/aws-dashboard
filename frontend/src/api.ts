@@ -2,7 +2,7 @@
 // On 401, clears the token and redirects to console SSO handoff.
 
 export const TOKEN_STORAGE_KEY = 'c2a_token'
-export const CONSOLE_SSO_HANDOFF_URL = 'https://console.control.apps.clue2.app/sso-handoff'
+export const CONSOLE_SSO_HANDOFF_URL = 'https://console.clue2.app/sso-handoff'
 
 export function getToken(): string | null {
   return sessionStorage.getItem(TOKEN_STORAGE_KEY)
