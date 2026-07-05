@@ -90,6 +90,38 @@ interface ClusterCosts {
   last30Days: number | null
   last7Days: number | null
   lastDay: number | null
+  // New optional fields returned when the /api/eks/costs-summary endpoint is
+  // extended with withNodes=true. Kept optional so older backends keep working.
+  controlPlaneMonthly?: number | null
+  nodeMonthly?: number | null
+  totalMonthly?: number | null
+  nodeCount?: number | null
+  estimated?: boolean
+}
+
+interface NodeTypeCost {
+  instanceType: string
+  count: number
+  hourly: number
+  monthly: number
+  estimated: boolean
+  capacityType?: string | null
+}
+
+interface ClusterCostBreakdown {
+  clusterName: string
+  control_plane_monthly: number
+  node_monthly: number
+  total_monthly: number
+  node_count: number
+  running_node_count?: number
+  node_types: NodeTypeCost[]
+  estimated: boolean
+  currency?: string
+  asOf?: string
+  // Local flag — true when we failed to load the breakdown from the backend
+  // and are showing whatever partial info we have.
+  _fetchFailed?: boolean
 }
 
 interface UpgradeStatus {
@@ -331,6 +363,10 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
   // EKS state
   const [eksClusters, setEksClusters] = useState<EksCluster[]>([])
   const [clusterCosts, setClusterCosts] = useState<Record<string, ClusterCosts>>({})
+  const [clusterCostBreakdowns, setClusterCostBreakdowns] = useState<
+    Record<string, ClusterCostBreakdown>
+  >({})
+  const [costBreakdownLoading, setCostBreakdownLoading] = useState<Record<string, boolean>>({})
   const [upgradeStatuses, setUpgradeStatuses] = useState<Record<string, UpgradeStatus>>({})
   const [selectedEksCluster, setSelectedEksCluster] = useState<string>('')
   const [eksLoading, setEksLoading] = useState(true)
@@ -592,6 +628,53 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
     }
   }
 
+  // Fetch the cluster's cost breakdown (control plane + nodes + total, plus per-instance-type detail).
+  // Fails gracefully if the endpoint is not deployed yet — the UI falls back to the existing
+  // last30Days number and shows a small info message.
+  const fetchClusterCostBreakdown = useCallback(async (clusterName: string) => {
+    if (clusterCostBreakdowns[clusterName]) return // already loaded
+    setCostBreakdownLoading(prev => ({ ...prev, [clusterName]: true }))
+    try {
+      const response = await apiFetch(`/api/eks/clusters/${clusterName}/cost`)
+      if (!response.ok) {
+        // Endpoint may not be deployed yet — mark as failed but don't throw.
+        setClusterCostBreakdowns(prev => ({
+          ...prev,
+          [clusterName]: {
+            clusterName,
+            control_plane_monthly: 0,
+            node_monthly: 0,
+            total_monthly: 0,
+            node_count: 0,
+            node_types: [],
+            estimated: true,
+            _fetchFailed: true,
+          },
+        }))
+        return
+      }
+      const data = await response.json()
+      setClusterCostBreakdowns(prev => ({ ...prev, [clusterName]: data }))
+    } catch (err) {
+      console.error('Failed to fetch cluster cost breakdown:', err)
+      setClusterCostBreakdowns(prev => ({
+        ...prev,
+        [clusterName]: {
+          clusterName,
+          control_plane_monthly: 0,
+          node_monthly: 0,
+          total_monthly: 0,
+          node_count: 0,
+          node_types: [],
+          estimated: true,
+          _fetchFailed: true,
+        },
+      }))
+    } finally {
+      setCostBreakdownLoading(prev => ({ ...prev, [clusterName]: false }))
+    }
+  }, [clusterCostBreakdowns])
+
   const openStopConfirmation = (clusterName: string) => {
     setClusterToStop(clusterName)
     setStopConfirmInput('')
@@ -648,6 +731,14 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
       fetchScalingStatus(selectedEksCluster)
     }
   }, [selectedEksCluster])
+
+  // Lazy-load cost breakdown only when the operator expands the details panel —
+  // avoids paying the describe_instances cost on every tab load.
+  useEffect(() => {
+    if (selectedEksCluster && clusterDetailsExpanded) {
+      fetchClusterCostBreakdown(selectedEksCluster)
+    }
+  }, [selectedEksCluster, clusterDetailsExpanded, fetchClusterCostBreakdown])
 
   const getStatusColor = (status: string) => {
     switch (status?.toLowerCase()) {
@@ -1018,36 +1109,60 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                   const totalLastDay = Object.values(clusterCosts).reduce((sum, c) => sum + (c?.lastDay || 0), 0)
                   const dailyRate = totalLast7Days / 7
                   const projectedMonthly = dailyRate * 30
+                  // True monthly (with nodes) — sum across all clusters where the backend
+                  // has attached totalMonthly. Absent/older backends leave this undefined
+                  // and the tile is hidden.
+                  const totalTrueMonthlyEntries = Object.values(clusterCosts).filter(
+                    (c) => c?.totalMonthly !== undefined && c?.totalMonthly !== null
+                  )
+                  const totalTrueMonthly = totalTrueMonthlyEntries.reduce(
+                    (sum, c) => sum + (c?.totalMonthly || 0),
+                    0
+                  )
+                  const anyEstimated = totalTrueMonthlyEntries.some((c) => c?.estimated)
 
                   return (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'grey.100', px: 2, py: 0.75, borderRadius: 2 }}>
-                      <Tooltip title="Last 24 hours">
+                      <Tooltip title="Last 24 hours (control plane billed cost)">
                         <Box sx={{ textAlign: 'center' }}>
                           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>24h</Typography>
-                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLastDay.toFixed(0)}</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary" sx={{ fontVariantNumeric: 'tabular-nums' }}>${totalLastDay.toFixed(0)}</Typography>
                         </Box>
                       </Tooltip>
                       <Divider orientation="vertical" flexItem />
-                      <Tooltip title="Last 7 days">
+                      <Tooltip title="Last 7 days (control plane billed cost)">
                         <Box sx={{ textAlign: 'center' }}>
                           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>7d</Typography>
-                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLast7Days.toFixed(0)}</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary" sx={{ fontVariantNumeric: 'tabular-nums' }}>${totalLast7Days.toFixed(0)}</Typography>
                         </Box>
                       </Tooltip>
                       <Divider orientation="vertical" flexItem />
-                      <Tooltip title="Last 30 days">
+                      <Tooltip title="Control plane 30d (Cost Explorer)">
                         <Box sx={{ textAlign: 'center' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>30d</Typography>
-                          <Typography variant="body2" fontWeight="600" color="text.primary">${totalLast30Days.toFixed(0)}</Typography>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>Ctrl 30d</Typography>
+                          <Typography variant="body2" fontWeight="600" color="text.primary" sx={{ fontVariantNumeric: 'tabular-nums' }}>${totalLast30Days.toFixed(0)}</Typography>
                         </Box>
                       </Tooltip>
                       <Divider orientation="vertical" flexItem />
-                      <Tooltip title="Projected monthly cost based on 7-day average">
-                        <Box sx={{ textAlign: 'center', bgcolor: 'primary.main', color: 'white', px: 1.5, py: 0.5, borderRadius: 1, mx: -0.5 }}>
-                          <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.9 }}>Projected</Typography>
-                          <Typography variant="body2" fontWeight="700">${projectedMonthly.toFixed(0)}/mo</Typography>
-                        </Box>
-                      </Tooltip>
+                      {totalTrueMonthlyEntries.length > 0 ? (
+                        <Tooltip title="True monthly cost — control plane plus EC2 node instances (on-demand list price × 730h)">
+                          <Box sx={{ textAlign: 'center', bgcolor: 'primary.main', color: 'white', px: 1.5, py: 0.5, borderRadius: 1, mx: -0.5 }}>
+                            <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.9 }}>
+                              True monthly (with nodes){anyEstimated ? ' *' : ''}
+                            </Typography>
+                            <Typography variant="body2" fontWeight="700" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              ${totalTrueMonthly.toFixed(0)}/mo
+                            </Typography>
+                          </Box>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="Projected monthly cost based on 7-day average (control plane only)">
+                          <Box sx={{ textAlign: 'center', bgcolor: 'primary.main', color: 'white', px: 1.5, py: 0.5, borderRadius: 1, mx: -0.5 }}>
+                            <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.9 }}>Projected</Typography>
+                            <Typography variant="body2" fontWeight="700" sx={{ fontVariantNumeric: 'tabular-nums' }}>${projectedMonthly.toFixed(0)}/mo</Typography>
+                          </Box>
+                        </Tooltip>
+                      )}
                     </Box>
                   )
                 })()}
@@ -1098,24 +1213,34 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                           </Box>
 
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-                              <Tooltip title="Last 30 days actual">
-                                <Typography variant="caption" color="text.secondary">
+                            <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <Tooltip title="Control plane 30d (billed via Cost Explorer)">
+                                <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                                   <AttachMoneyIcon sx={{ fontSize: 12, verticalAlign: 'middle' }} />
-                                  30d: {formatCost(costs?.last30Days)}
+                                  Ctrl 30d: {formatCost(costs?.last30Days)}
                                 </Typography>
                               </Tooltip>
-                              {costs?.last7Days && (
-                                <Tooltip title="Projected monthly (based on 7-day avg)">
+                              {costs?.totalMonthly !== undefined && costs?.totalMonthly !== null ? (
+                                <Tooltip title={`Control plane + ${formatCost(costs?.nodeMonthly)}/mo in EC2 node instances${costs?.estimated ? ' (estimated from on-demand list price)' : ''}`}>
+                                  <Chip
+                                    label={`Total: $${(costs.totalMonthly || 0).toFixed(0)}/mo${costs?.estimated ? ' *' : ''}`}
+                                    size="small"
+                                    color="primary"
+                                    variant="filled"
+                                    sx={{ height: 18, fontSize: '0.65rem', fontVariantNumeric: 'tabular-nums' }}
+                                  />
+                                </Tooltip>
+                              ) : costs?.last7Days ? (
+                                <Tooltip title="Projected monthly (based on 7-day avg) — control plane only">
                                   <Chip
                                     label={`~$${((costs.last7Days / 7) * 30).toFixed(0)}/mo`}
                                     size="small"
                                     color="primary"
                                     variant="outlined"
-                                    sx={{ height: 18, fontSize: '0.65rem' }}
+                                    sx={{ height: 18, fontSize: '0.65rem', fontVariantNumeric: 'tabular-nums' }}
                                   />
                                 </Tooltip>
-                              )}
+                              ) : null}
                             </Box>
                             {selectedEksCluster === cluster.name ? (
                               <Chip icon={<CheckCircleIcon />} label="Connected" color="success" size="small" sx={{ height: 20 }} />
@@ -1314,31 +1439,138 @@ function ClusterTab({ initialCluster, focusedView = false }: ClusterTabProps) {
                           </Box>
                         </Grid>
 
-                        {/* Costs */}
+                        {/* Costs — three-tile breakdown (Control plane / Nodes / Total) */}
                         <Grid item xs={12} md={4}>
-                          <Typography variant="caption" color="text.secondary" fontWeight="600">
-                            COST SUMMARY
-                          </Typography>
-                          <Box sx={{ mt: 0.5, display: 'flex', gap: 2 }}>
-                            <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
-                              <Typography variant="caption" color="text.secondary">30 Days</Typography>
-                              <Typography variant="h6" color="primary" fontWeight="600">
-                                {formatCost(costs?.last30Days)}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
-                              <Typography variant="caption" color="text.secondary">7 Days</Typography>
-                              <Typography variant="h6" color="primary" fontWeight="600">
-                                {formatCost(costs?.last7Days)}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
-                              <Typography variant="caption" color="text.secondary">24 Hours</Typography>
-                              <Typography variant="h6" color="primary" fontWeight="600">
-                                {formatCost(costs?.lastDay)}
-                              </Typography>
-                            </Box>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography variant="caption" color="text.secondary" fontWeight="600">
+                              TRUE MONTHLY COST
+                            </Typography>
+                            {(() => {
+                              const breakdown = clusterCostBreakdowns[selectedEksCluster]
+                              if (breakdown?.estimated) {
+                                return (
+                                  <Tooltip title="Node cost estimated from us-west-2 on-demand list prices; actual billing may differ (reserved instances / savings plans not accounted for).">
+                                    <InfoIcon fontSize="inherit" sx={{ color: 'warning.main', fontSize: 14 }} />
+                                  </Tooltip>
+                                )
+                              }
+                              return null
+                            })()}
                           </Box>
+                          {(() => {
+                            const breakdown = clusterCostBreakdowns[selectedEksCluster]
+                            const loadingBreakdown = costBreakdownLoading[selectedEksCluster]
+                            // If we have a breakdown, use it. Otherwise fall back to the
+                            // rolled-up numbers already attached to clusterCosts (which the
+                            // costs-summary endpoint may also provide) or the plain 30d/7d/24h.
+                            const ctrlMonthly =
+                              breakdown?.control_plane_monthly ??
+                              costs?.controlPlaneMonthly ??
+                              null
+                            const nodeMonthly =
+                              breakdown?.node_monthly ?? costs?.nodeMonthly ?? null
+                            const totalMonthly =
+                              breakdown?.total_monthly ?? costs?.totalMonthly ?? null
+
+                            return (
+                              <>
+                                <Box sx={{ mt: 0.5, display: 'flex', gap: 1 }}>
+                                  <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
+                                    <Typography variant="caption" color="text.secondary">Control plane</Typography>
+                                    <Typography variant="h6" color="text.secondary" fontWeight="500" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      {ctrlMonthly !== null ? formatCost(ctrlMonthly) : '-'}
+                                    </Typography>
+                                  </Box>
+                                  <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
+                                    <Typography variant="caption" color="text.secondary">Nodes</Typography>
+                                    <Typography variant="h6" color="text.secondary" fontWeight="500" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      {loadingBreakdown && nodeMonthly === null ? (
+                                        <CircularProgress size={14} />
+                                      ) : nodeMonthly !== null ? (
+                                        formatCost(nodeMonthly)
+                                      ) : (
+                                        '-'
+                                      )}
+                                    </Typography>
+                                  </Box>
+                                  <Box sx={{ textAlign: 'center', flex: 1, bgcolor: 'primary.main', color: 'white', borderRadius: 1, p: 1 }}>
+                                    <Typography variant="caption" sx={{ opacity: 0.9 }}>Total</Typography>
+                                    <Typography variant="h6" fontWeight="700" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      {totalMonthly !== null ? formatCost(totalMonthly) : '-'}
+                                    </Typography>
+                                  </Box>
+                                </Box>
+
+                                {/* Historical (billed) — small line below */}
+                                <Box sx={{ mt: 1, display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    Billed:
+                                  </Typography>
+                                  <Tooltip title="Cost Explorer — control plane, last 30 days">
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      30d {formatCost(costs?.last30Days)}
+                                    </Typography>
+                                  </Tooltip>
+                                  <Tooltip title="Cost Explorer — control plane, last 7 days">
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      7d {formatCost(costs?.last7Days)}
+                                    </Typography>
+                                  </Tooltip>
+                                  <Tooltip title="Cost Explorer — control plane, last 24 hours">
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                      24h {formatCost(costs?.lastDay)}
+                                    </Typography>
+                                  </Tooltip>
+                                </Box>
+
+                                {/* Node-types breakdown table */}
+                                {breakdown && !breakdown._fetchFailed && breakdown.node_types.length > 0 && (
+                                  <Box sx={{ mt: 1 }}>
+                                    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 180 }}>
+                                      <Table size="small" stickyHeader>
+                                        <TableHead>
+                                          <TableRow>
+                                            <TableCell sx={{ fontWeight: 600, fontSize: '0.7rem', py: 0.5 }}>Type</TableCell>
+                                            <TableCell sx={{ fontWeight: 600, fontSize: '0.7rem', py: 0.5 }} align="right">Count</TableCell>
+                                            <TableCell sx={{ fontWeight: 600, fontSize: '0.7rem', py: 0.5 }} align="right">$/hr</TableCell>
+                                            <TableCell sx={{ fontWeight: 600, fontSize: '0.7rem', py: 0.5 }} align="right">$/mo</TableCell>
+                                          </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                          {breakdown.node_types.map((nt) => (
+                                            <TableRow key={`${nt.instanceType}-${nt.capacityType || 'on-demand'}`}>
+                                              <TableCell sx={{ py: 0.5, fontSize: '0.75rem' }}>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                  <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                                                    {nt.instanceType}
+                                                  </Typography>
+                                                  {nt.capacityType === 'SPOT' && (
+                                                    <Chip label="spot" size="small" color="warning" variant="outlined" sx={{ height: 16, fontSize: '0.6rem' }} />
+                                                  )}
+                                                  {nt.estimated && nt.capacityType !== 'SPOT' && (
+                                                    <Chip label="est" size="small" variant="outlined" sx={{ height: 16, fontSize: '0.6rem' }} />
+                                                  )}
+                                                </Box>
+                                              </TableCell>
+                                              <TableCell sx={{ py: 0.5, fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums' }} align="right">{nt.count}</TableCell>
+                                              <TableCell sx={{ py: 0.5, fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums' }} align="right">${nt.hourly.toFixed(4)}</TableCell>
+                                              <TableCell sx={{ py: 0.5, fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums' }} align="right">${nt.monthly.toFixed(2)}</TableCell>
+                                            </TableRow>
+                                          ))}
+                                        </TableBody>
+                                      </Table>
+                                    </TableContainer>
+                                  </Box>
+                                )}
+
+                                {breakdown?._fetchFailed && (
+                                  <Alert severity="info" sx={{ mt: 1, py: 0.5, fontSize: '0.7rem' }}>
+                                    Node cost breakdown unavailable — /api/eks/clusters/{selectedEksCluster}/cost not yet deployed.
+                                  </Alert>
+                                )}
+                              </>
+                            )
+                          })()}
                         </Grid>
 
                         {/* Power Controls */}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Box,
   Card,
@@ -24,6 +24,7 @@ import {
   DialogContent,
   IconButton,
   Divider,
+  Stack,
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import ComputerIcon from '@mui/icons-material/Computer'
@@ -39,7 +40,18 @@ import InfoIcon from '@mui/icons-material/Info'
 import CloseIcon from '@mui/icons-material/Close'
 import StorageIcon from '@mui/icons-material/Storage'
 import SecurityIcon from '@mui/icons-material/Security'
+import HubIcon from '@mui/icons-material/Hub'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import { apiFetch } from '../api'
+
+interface UseHints {
+  name?: string | null
+  environment?: string | null
+  owner?: string | null
+  c2a_account?: string | null
+  c2a_project?: string | null
+  iam_profile?: string | null
+}
 
 interface Instance {
   instanceId: string
@@ -56,6 +68,14 @@ interface Instance {
   platform: string
   architecture: string
   tags: Record<string, string>
+  // New optional fields — populated by the backend when EKS membership can be inferred
+  parent_cluster?: string | null
+  node_role_hint?: string | null
+  use_hints?: UseHints | null
+  monthly_estimate?: number | null
+  estimated?: boolean
+  unknownCluster?: boolean
+  parent_cluster_conflict?: string[]
 }
 
 interface EC2Summary {
@@ -129,7 +149,18 @@ function ComputeTab() {
       const summaryData = await summaryRes.json()
 
       if (instancesData.error) throw new Error(instancesData.error)
-      setInstances(instancesData.instances || [])
+      // Backend may return either the flat {instances:[]} shape or the pre-bucketed
+      // {groups:[{kind,instances:[]}]} shape (when group_by=cluster). Handle both so
+      // the tab keeps working regardless of which backend is deployed.
+      let flat: Instance[] = []
+      if (Array.isArray(instancesData.groups)) {
+        for (const g of instancesData.groups) {
+          if (Array.isArray(g.instances)) flat = flat.concat(g.instances)
+        }
+      } else {
+        flat = instancesData.instances || []
+      }
+      setInstances(flat)
       setSummary(summaryData)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load EC2 data')
@@ -213,9 +244,283 @@ function ComputeTab() {
       instance.instanceType.toLowerCase().includes(search) ||
       instance.state.toLowerCase().includes(search) ||
       (instance.privateIp && instance.privateIp.includes(search)) ||
-      (instance.publicIp && instance.publicIp.includes(search))
+      (instance.publicIp && instance.publicIp.includes(search)) ||
+      (instance.parent_cluster && instance.parent_cluster.toLowerCase().includes(search))
     )
   })
+
+  // Sort so that running instances come before stopped/other states inside each bucket.
+  const stateRank = (s: string) => {
+    switch (s) {
+      case 'running':
+        return 0
+      case 'pending':
+        return 1
+      case 'stopping':
+        return 2
+      case 'stopped':
+        return 3
+      default:
+        return 4
+    }
+  }
+
+  // Partition into EKS-node bucket (parent_cluster != null) and orphans.
+  // Within EKS nodes, sub-group by parent_cluster for the header breakdown.
+  const groupedInstances = useMemo(() => {
+    const clustered: Instance[] = []
+    const orphans: Instance[] = []
+    for (const inst of filteredInstances) {
+      if (inst.parent_cluster) clustered.push(inst)
+      else orphans.push(inst)
+    }
+    clustered.sort(
+      (a, b) =>
+        (a.parent_cluster || '').localeCompare(b.parent_cluster || '') ||
+        stateRank(a.state) - stateRank(b.state) ||
+        (a.name || '').localeCompare(b.name || '')
+    )
+    orphans.sort(
+      (a, b) => stateRank(a.state) - stateRank(b.state) || (a.name || '').localeCompare(b.name || '')
+    )
+    // Per-cluster counts for the header breakdown
+    const clusterBreakdown: Record<string, number> = {}
+    for (const inst of clustered) {
+      const key = inst.parent_cluster || 'unknown'
+      clusterBreakdown[key] = (clusterBreakdown[key] || 0) + 1
+    }
+    return { clustered, orphans, clusterBreakdown }
+  }, [filteredInstances])
+
+  // Compact one-line use-hints for orphan rows.
+  const summarizeUseHints = (hints: UseHints | null | undefined): string => {
+    if (!hints) return ''
+    const parts: string[] = []
+    if (hints.name) parts.push(hints.name)
+    if (hints.environment) parts.push(`env: ${hints.environment}`)
+    if (hints.owner) parts.push(`owner: ${hints.owner}`)
+    if (hints.c2a_project) parts.push(`project: ${hints.c2a_project}`)
+    else if (hints.c2a_account) parts.push(`account: ${hints.c2a_account}`)
+    if (parts.length === 0 && hints.iam_profile) parts.push(`iam: ${hints.iam_profile}`)
+    return parts.slice(0, 3).join(' • ')
+  }
+
+  const formatMonthlyEstimate = (
+    estimate: number | null | undefined,
+    estimated: boolean | undefined,
+    state: string
+  ): string | null => {
+    if (estimate === null || estimate === undefined) return null
+    if (state !== 'running') return `$0/mo (${state})`
+    return `$${estimate.toFixed(2)}/mo${estimated ? ' (est.)' : ''}`
+  }
+
+  // Shared row renderer — used by both the EKS-nodes and orphans tables so the row
+  // markup stays in sync automatically.
+  const renderInstanceRow = (instance: Instance) => {
+    const monthly = formatMonthlyEstimate(
+      instance.monthly_estimate,
+      instance.estimated,
+      instance.state
+    )
+    const useHintsSummary = summarizeUseHints(instance.use_hints)
+    return (
+      <TableRow key={instance.instanceId} hover>
+        <TableCell>
+          <Typography variant="body2" fontWeight="500">
+            {instance.name || '-'}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography
+            variant="body2"
+            sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+          >
+            {instance.instanceId}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Chip
+            icon={getStateIcon(instance.state) || undefined}
+            label={instance.state}
+            size="small"
+            color={getStateColor(instance.state) as any}
+          />
+        </TableCell>
+        <TableCell sx={{ maxWidth: 260 }}>
+          {instance.parent_cluster ? (
+            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+              <Tooltip
+                title={
+                  instance.unknownCluster
+                    ? `Cluster '${instance.parent_cluster}' not returned by eks.list_clusters — likely a self-managed / legacy cluster`
+                    : `View cluster ${instance.parent_cluster}`
+                }
+              >
+                <Chip
+                  icon={<HubIcon />}
+                  label={instance.parent_cluster}
+                  size="small"
+                  color={instance.unknownCluster ? 'warning' : 'primary'}
+                  clickable
+                  onClick={() => {
+                    // Open the cluster in a new browser tab preselected via ?cluster=<name>.
+                    // Existing pattern in ClusterTab uses the same query param convention.
+                    window.open(
+                      `${window.location.origin}?cluster=${instance.parent_cluster}`,
+                      '_blank'
+                    )
+                  }}
+                />
+              </Tooltip>
+              {instance.node_role_hint && (
+                <Tooltip
+                  title={
+                    instance.node_role_hint === 'self-managed'
+                      ? 'Self-managed node (kubernetes.io/cluster tag but no eks:nodegroup-name)'
+                      : `Managed nodegroup: ${instance.node_role_hint}`
+                  }
+                >
+                  <Chip
+                    label={instance.node_role_hint}
+                    size="small"
+                    variant="outlined"
+                    sx={{ height: 20, fontSize: '0.7rem' }}
+                  />
+                </Tooltip>
+              )}
+              {instance.parent_cluster_conflict && instance.parent_cluster_conflict.length > 0 && (
+                <Tooltip
+                  title={`Conflicting cluster tags: ${instance.parent_cluster_conflict.join(', ')}`}
+                >
+                  <Chip
+                    icon={<WarningIcon />}
+                    label="conflict"
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    sx={{ height: 20, fontSize: '0.7rem' }}
+                  />
+                </Tooltip>
+              )}
+            </Stack>
+          ) : useHintsSummary ? (
+            <Tooltip
+              title={
+                instance.use_hints?.iam_profile
+                  ? `IAM: ${instance.use_hints.iam_profile}`
+                  : 'No cluster membership detected'
+              }
+            >
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ fontSize: '0.75rem', whiteSpace: 'normal' }}
+              >
+                {useHintsSummary}
+              </Typography>
+            </Tooltip>
+          ) : (
+            <Typography variant="body2" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
+              (unidentified)
+            </Typography>
+          )}
+        </TableCell>
+        <TableCell>
+          <Chip label={instance.instanceType} size="small" variant="outlined" />
+        </TableCell>
+        <TableCell>
+          {monthly ? (
+            <Typography
+              variant="body2"
+              sx={{
+                fontFamily: 'monospace',
+                fontSize: '0.75rem',
+                fontVariantNumeric: 'tabular-nums',
+                color: instance.state === 'running' ? 'text.primary' : 'text.disabled',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {monthly}
+            </Typography>
+          ) : (
+            <Typography variant="body2" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
+              -
+            </Typography>
+          )}
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+            {instance.privateIp || '-'}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" fontSize="0.75rem">
+            {instance.availabilityZone}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2">{instance.uptime || '-'}</Typography>
+        </TableCell>
+        <TableCell>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Tooltip title="Details">
+              <IconButton
+                size="small"
+                onClick={() => handleViewDetails(instance.instanceId)}
+              >
+                <InfoIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {instance.state === 'stopped' && (
+              <Tooltip title="Start">
+                <IconButton
+                  size="small"
+                  color="success"
+                  onClick={() => handleInstanceAction(instance.instanceId, 'start')}
+                  disabled={actionLoading === instance.instanceId}
+                >
+                  {actionLoading === instance.instanceId ? (
+                    <CircularProgress size={16} />
+                  ) : (
+                    <PlayArrowIcon fontSize="small" />
+                  )}
+                </IconButton>
+              </Tooltip>
+            )}
+            {instance.state === 'running' && (
+              <>
+                <Tooltip title="Stop">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={() => handleInstanceAction(instance.instanceId, 'stop')}
+                    disabled={actionLoading === instance.instanceId}
+                  >
+                    {actionLoading === instance.instanceId ? (
+                      <CircularProgress size={16} />
+                    ) : (
+                      <StopIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Reboot">
+                  <IconButton
+                    size="small"
+                    color="warning"
+                    onClick={() => handleInstanceAction(instance.instanceId, 'reboot')}
+                    disabled={actionLoading === instance.instanceId}
+                  >
+                    <RestartAltIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </Box>
+        </TableCell>
+      </TableRow>
+    )
+  }
 
   if (loading) {
     return (
@@ -338,7 +643,7 @@ function ComputeTab() {
         </motion.div>
       )}
 
-      {/* Instances Table */}
+      {/* Instances — grouped by EKS membership */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -346,7 +651,7 @@ function ComputeTab() {
       >
         <Card>
           <CardContent>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <ComputerIcon color="primary" />
                 <Typography variant="h6" fontWeight="600">
@@ -374,134 +679,118 @@ function ComputeTab() {
               </Box>
             </Box>
 
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Instance ID</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>State</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Private IP</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Public IP</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>AZ</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Uptime</TableCell>
-                    <TableCell sx={{ fontWeight: 600, width: 180 }}>Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredInstances.map((instance) => (
-                    <TableRow key={instance.instanceId} hover>
-                      <TableCell>
-                        <Typography variant="body2" fontWeight="500">
-                          {instance.name || '-'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography
-                          variant="body2"
-                          sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
-                        >
-                          {instance.instanceId}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          icon={getStateIcon(instance.state) || undefined}
-                          label={instance.state}
-                          size="small"
-                          color={getStateColor(instance.state) as any}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Chip label={instance.instanceType} size="small" variant="outlined" />
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                          {instance.privateIp || '-'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                          {instance.publicIp || '-'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" fontSize="0.75rem">
-                          {instance.availabilityZone}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2">{instance.uptime || '-'}</Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          <Tooltip title="Details">
-                            <IconButton
-                              size="small"
-                              onClick={() => handleViewDetails(instance.instanceId)}
-                            >
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          {instance.state === 'stopped' && (
-                            <Tooltip title="Start">
-                              <IconButton
-                                size="small"
-                                color="success"
-                                onClick={() => handleInstanceAction(instance.instanceId, 'start')}
-                                disabled={actionLoading === instance.instanceId}
-                              >
-                                {actionLoading === instance.instanceId ? (
-                                  <CircularProgress size={16} />
-                                ) : (
-                                  <PlayArrowIcon fontSize="small" />
-                                )}
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                          {instance.state === 'running' && (
-                            <>
-                              <Tooltip title="Stop">
-                                <IconButton
-                                  size="small"
-                                  color="error"
-                                  onClick={() => handleInstanceAction(instance.instanceId, 'stop')}
-                                  disabled={actionLoading === instance.instanceId}
-                                >
-                                  {actionLoading === instance.instanceId ? (
-                                    <CircularProgress size={16} />
-                                  ) : (
-                                    <StopIcon fontSize="small" />
-                                  )}
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Reboot">
-                                <IconButton
-                                  size="small"
-                                  color="warning"
-                                  onClick={() => handleInstanceAction(instance.instanceId, 'reboot')}
-                                  disabled={actionLoading === instance.instanceId}
-                                >
-                                  <RestartAltIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            </>
-                          )}
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {filteredInstances.length === 0 && (
+            {/* Section 1: EKS nodes */}
+            <Box sx={{ mb: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                <HubIcon fontSize="small" color="primary" />
+                <Typography variant="subtitle1" fontWeight="600">
+                  EKS nodes ({groupedInstances.clustered.length})
+                </Typography>
+                {Object.entries(groupedInstances.clusterBreakdown).length > 0 && (
+                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', ml: 1 }}>
+                    {Object.entries(groupedInstances.clusterBreakdown).map(([cluster, count]) => (
+                      <Chip
+                        key={cluster}
+                        label={`${cluster}: ${count}`}
+                        size="small"
+                        variant="outlined"
+                        color="primary"
+                        sx={{ height: 20, fontSize: '0.7rem' }}
+                      />
+                    ))}
+                  </Box>
+                )}
+              </Box>
+
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
                     <TableRow>
-                      <TableCell colSpan={9} align="center">
-                        <Typography color="text.secondary">No instances found</Typography>
-                      </TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Instance ID</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>State</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Cluster / Use</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
+                      <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>Cost</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Private IP</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>AZ</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Uptime</TableCell>
+                      <TableCell sx={{ fontWeight: 600, width: 180 }}>Actions</TableCell>
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                  </TableHead>
+                  <TableBody>
+                    {groupedInstances.clustered.map((instance) =>
+                      renderInstanceRow(instance)
+                    )}
+                    {groupedInstances.clustered.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={10} align="center">
+                          <Typography color="text.secondary" variant="body2">
+                            No EKS nodes match the current filter.
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+
+            {/* Section 2: Not in a cluster */}
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <WarningIcon fontSize="small" sx={{ color: 'warning.main' }} />
+                <Typography variant="subtitle1" fontWeight="600">
+                  Not in a cluster ({groupedInstances.orphans.length})
+                </Typography>
+                {groupedInstances.orphans.length > 0 && (
+                  <Tooltip title="These EC2 instances are not tagged as EKS nodes. Their identifying tags (Name, Environment, Owner, c2a-project) are shown as chips.">
+                    <HelpOutlineIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                  </Tooltip>
+                )}
+              </Box>
+
+              <TableContainer
+                component={Paper}
+                variant="outlined"
+                sx={{
+                  borderColor: groupedInstances.orphans.length > 0 ? 'warning.main' : 'divider',
+                  borderStyle: 'solid',
+                  borderWidth: groupedInstances.orphans.length > 0 ? 1 : 1,
+                }}
+              >
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Instance ID</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>State</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Cluster / Use</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
+                      <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>Cost</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Private IP</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>AZ</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Uptime</TableCell>
+                      <TableCell sx={{ fontWeight: 600, width: 180 }}>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {groupedInstances.orphans.map((instance) =>
+                      renderInstanceRow(instance)
+                    )}
+                    {groupedInstances.orphans.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={10} align="center">
+                          <Typography color="text.secondary" variant="body2">
+                            Every EC2 is accounted for by a cluster.
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
           </CardContent>
         </Card>
       </motion.div>
