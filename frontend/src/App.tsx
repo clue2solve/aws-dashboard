@@ -104,7 +104,7 @@ function App() {
         <Toolbar>
           <CloudIcon sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            AWS Dashboard - Clue2Solve
+            Platform Admin - Clue2Solve
           </Typography>
         </Toolbar>
       </AppBar>

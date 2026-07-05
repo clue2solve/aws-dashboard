@@ -116,7 +116,7 @@ function AccessDenied({ email }: { email?: string }) {
         Access denied
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 480 }}>
-        The AWS Dashboard is restricted to SYSTEM administrators.
+        The Platform Admin is restricted to SYSTEM administrators.
         {email && (
           <>
             {' '}

@@ -1,15 +1,15 @@
-# aws-dashboard — c2a deployment guide
+# admin — c2a deployment guide
 
-Target: deploy `aws-dashboard` as a Knative service on the c2a platform
+Target: deploy `admin` as a Knative service on the c2a platform
 (`control` project namespace), reachable at
-`aws-dashboard.control.apps.clue2.app`. All API endpoints require a valid
+`admin.clue2.app`. All API endpoints require a valid
 c2a JWT with `userType == "SYSTEM"`.
 
 ---
 
 ## 1. IAM policy for the Cost Explorer read-only user
 
-Create a dedicated IAM user (e.g. `aws-dashboard-ce-reader`) with only the
+Create a dedicated IAM user (e.g. `admin-ce-reader`) with only the
 permissions this app needs. Cost Explorer is a us-east-1-only service, so
 regardless of where the app runs the client must be pinned to us-east-1.
 
@@ -58,7 +58,7 @@ c2a as env vars in step 3.
 
 ## 2. Create the c2a app
 
-The repo layout has the FastAPI service under `aws-dashboard/backend/`. The
+The repo layout has the FastAPI service under `admin/backend/`. The
 kpack Image must point at that subdirectory so the Paketo Python buildpack
 sees `requirements.txt` + `Procfile` at the build-context root.
 
@@ -68,23 +68,23 @@ sees `requirements.txt` + `Procfile` at the build-context root.
 c2a use project control
 
 c2a create app \
-  --name aws-dashboard \
+  --name admin \
   --repo https://github.com/clue2solve/clue2app \
   --branch main \
-  --subdirectory aws-dashboard/backend \
+  --subdirectory admin/backend \
   --runtime python \
   --port 8080
 ```
 
 (`--subdirectory` maps to the kpack Image `source.git.subPath` field. Verify
-with `kubectl -n control get image aws-dashboard -o yaml | grep -A3 source:`.)
+with `kubectl -n control get image admin -o yaml | grep -A3 source:`.)
 
 ### 2b. Via the console UI
 
 1. Log in as a SYSTEM user at <https://console.clue2.app>.
 2. Project → `control` → **Add app**.
 3. GitHub source → repo `clue2solve/clue2app`, branch `main`.
-4. **Root directory** field: `aws-dashboard/backend` (this is the critical
+4. **Root directory** field: `admin/backend` (this is the critical
    knob — leave it blank and kpack tries to build the monorepo root and
    fails).
 5. Runtime: Python (Paketo). Port: `8080`.
@@ -112,7 +112,7 @@ The app reads five runtime env vars. Set them via `c2a` after the app exists.
 ### 3a. `C2A_JWT_SECRET` — reuse the platform secret (do not mint a new one)
 
 The coordinator + auth-service already have `JWT_SECRET_KEY` set to a
-base64-encoded HMAC secret. aws-dashboard needs the **same value** under the
+base64-encoded HMAC secret. admin needs the **same value** under the
 name `C2A_JWT_SECRET`. The recommended path is to bind directly to the
 existing platform secret so rotations propagate automatically:
 
@@ -120,9 +120,9 @@ existing platform secret so rotations propagate automatically:
 # List platform secrets to confirm the source name.
 c2a secrets list -n control | grep -i jwt
 
-# Bind the coordinator's JWT secret into aws-dashboard as C2A_JWT_SECRET.
+# Bind the coordinator's JWT secret into admin as C2A_JWT_SECRET.
 c2a secrets bind \
-  --app aws-dashboard \
+  --app admin \
   --secret jwt-secret-key \
   --key JWT_SECRET_KEY \
   --as C2A_JWT_SECRET
@@ -136,18 +136,18 @@ next lifecycle event.)
 Verify:
 
 ```bash
-kubectl -n control get ksvc aws-dashboard -o yaml | grep -A2 C2A_JWT_SECRET
+kubectl -n control get ksvc admin -o yaml | grep -A2 C2A_JWT_SECRET
 ```
 
 ### 3b. `C2A_LOGIN_URL` — plain env var
 
 ```bash
-c2a set env --app aws-dashboard \
+c2a set env --app admin \
   C2A_LOGIN_URL=https://console.clue2.app/login
 ```
 
 (Frontend uses the `/sso-handoff` route added on the console side —
-`https://console.control.apps.clue2.app/sso-handoff?returnTo=<url>` — but the
+`https://console.clue2.app/sso-handoff?returnTo=<url>` — but the
 `C2A_LOGIN_URL` fallback stays available for any legacy redirect path.)
 
 ### 3c. AWS Cost Explorer credentials
@@ -156,13 +156,13 @@ Create a c2a secret from the IAM access key you generated in step 1, then
 bind it:
 
 ```bash
-c2a secrets create aws-dashboard-ce \
+c2a secrets create admin-ce \
   --from-literal AWS_ACCESS_KEY_ID=AKIA... \
   --from-literal AWS_SECRET_ACCESS_KEY=...
 
-c2a secrets bind --app aws-dashboard --secret aws-dashboard-ce
+c2a secrets bind --app admin --secret admin-ce
 
-c2a set env --app aws-dashboard AWS_REGION=us-east-1
+c2a set env --app admin AWS_REGION=us-east-1
 ```
 
 Cost Explorer only lives in us-east-1 — the workload region is irrelevant,
@@ -174,8 +174,8 @@ but the boto3 client MUST use us-east-1.
 | ----------------------- | ----------------------------------------------------- | ------------------------------------------- |
 | `C2A_JWT_SECRET`        | bound from `jwt-secret-key` secret (base64 HMAC)      | Verify JWTs; base64-decode before PyJWT     |
 | `C2A_LOGIN_URL`         | plain env                                             | Fallback console URL for unauth redirects   |
-| `AWS_ACCESS_KEY_ID`     | `aws-dashboard-ce` secret                             | boto3 Cost Explorer client                  |
-| `AWS_SECRET_ACCESS_KEY` | `aws-dashboard-ce` secret                             | boto3 Cost Explorer client                  |
+| `AWS_ACCESS_KEY_ID`     | `admin-ce` secret                             | boto3 Cost Explorer client                  |
+| `AWS_SECRET_ACCESS_KEY` | `admin-ce` secret                             | boto3 Cost Explorer client                  |
 | `AWS_REGION`            | plain env, always `us-east-1`                         | Cost Explorer regional endpoint             |
 | `PORT`                  | injected by Knative (usually 8080)                    | Uvicorn bind port (Procfile reads `$PORT`)  |
 
@@ -185,8 +185,8 @@ but the boto3 client MUST use us-east-1.
 
 ```bash
 c2a domains assign \
-  --app aws-dashboard \
-  --domain aws-dashboard.control.apps.clue2.app
+  --app admin \
+  --domain admin.clue2.app
 ```
 
 The `control.apps.clue2.app` wildcard is already provisioned, so no DNS
@@ -196,29 +196,29 @@ DomainMapping in ~30 seconds.
 Confirm:
 
 ```bash
-c2a domains status --app aws-dashboard
-curl -I https://aws-dashboard.control.apps.clue2.app/api/health
+c2a domains status --app admin
+curl -I https://admin.clue2.app/api/health
 ```
 
 ---
 
 ## 5. Post-deploy smoke check
 
-Wait for build + rollout (`c2a build list --app aws-dashboard` should show
+Wait for build + rollout (`c2a build list --app admin` should show
 the latest build `Succeeded`, and `kubectl -n control get ksvc
-aws-dashboard` should show `READY=True`).
+admin` should show `READY=True`).
 
 ### 5a. Health check (no auth)
 
 ```bash
-curl -sSf https://aws-dashboard.control.apps.clue2.app/api/health
+curl -sSf https://admin.clue2.app/api/health
 # → 200 { "status": "healthy" }
 ```
 
 ### 5b. Unauth request → 401
 
 ```bash
-curl -si https://aws-dashboard.control.apps.clue2.app/api/costs/summary
+curl -si https://admin.clue2.app/api/costs/summary
 # → HTTP/2 401
 # → { "error": "UNAUTHORIZED", "message": "missing bearer token" }
 ```
@@ -235,7 +235,7 @@ TOKEN='<paste>'
 
 curl -si \
   -H "Authorization: Bearer $TOKEN" \
-  https://aws-dashboard.control.apps.clue2.app/api/costs/summary
+  https://admin.clue2.app/api/costs/summary
 # → HTTP/2 200
 # → { "currency": "USD", "mtd": { ... }, "generated_at": "...Z" }
 ```
@@ -247,7 +247,7 @@ Any non-SYSTEM JWT should fail closed:
 ```bash
 curl -si \
   -H "Authorization: Bearer $ACCOUNT_TOKEN" \
-  https://aws-dashboard.control.apps.clue2.app/api/costs/summary
+  https://admin.clue2.app/api/costs/summary
 # → HTTP/2 403
 # → { "error": "FORBIDDEN", "message": "SYSTEM users only" }
 ```
@@ -262,14 +262,14 @@ The secret in the env var is base64-encoded; PyJWT needs the raw bytes. See
 ## Rollback
 
 ```bash
-c2a build list --app aws-dashboard
-c2a rebuild app --app aws-dashboard --build <previous-succeeded-build-id>
+c2a build list --app admin
+c2a rebuild app --app admin --build <previous-succeeded-build-id>
 ```
 
 Or, for env-var mistakes, unset then re-set:
 
 ```bash
-c2a set env --app aws-dashboard --unset C2A_LOGIN_URL
+c2a set env --app admin --unset C2A_LOGIN_URL
 ```
 
 Knative will roll a new revision on any env change; traffic shifts to 100%
