@@ -158,7 +158,7 @@ function PlatformCostTab() {
           apiGet<SummaryResponse>('/api/costs/summary'),
           apiGet<ByServiceResponse>('/api/costs/by-service?months=1'),
           apiGet<HistoricalResponse>('/api/costs/historical?months=6'),
-          apiGet<TopResourcesResponse>('/api/costs/top-resources?months=1&limit=20'),
+          apiGet<TopResourcesResponse>('/api/costs/top-resources?days=14&limit=20'),
         ])
         if (cancelled) return
         setSummary(s)
