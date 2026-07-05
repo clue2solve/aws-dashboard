@@ -1,0 +1,20 @@
+{
+  "ports": {
+    "backend": 54321,
+    "frontend": 54320
+  },
+  "aws": {
+    "identityStoreId": "d-9267425629",
+    "ssoInstanceArn": "arn:aws:sso:::instance/ssoins-79076f318b0ce4c4",
+    "accountId": "776809830581"
+  },
+  "auth": {
+    "jwtSecretEnvVar": "C2A_JWT_SECRET",
+    "loginUrlEnvVar": "C2A_LOGIN_URL",
+    "defaultLoginUrl": "https://console.clue2.app/login",
+    "ssoHandoffUrl": "https://console.control.apps.clue2.app/sso-handoff",
+    "requiredUserType": "SYSTEM",
+    "jwtAlgorithm": "HS256",
+    "jwtSecretIsBase64": true
+  }
+}
