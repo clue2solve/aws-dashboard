@@ -336,7 +336,7 @@ def costs_by_service(
     end = date.today()
     # Approximate month arithmetic — trailing N*30 days is close enough for
     # CE's own MONTHLY buckets and matches how the frontend labels the range.
-    start = end - timedelta(days=days)
+    start = end - timedelta(days=months * 30)
 
     ce = _ce_client()
     try:
@@ -467,7 +467,7 @@ def costs_top_resources(
         return cached
 
     end = date.today()
-    start = end - timedelta(days=months * 30)
+    start = end - timedelta(days=days)
 
     ce = _ce_client()
     try:
