@@ -8,6 +8,7 @@ import ComputeTab from './ComputeTab'
 import ClusterTab from './ClusterTab'
 import AccessTab from './AccessTab'
 import PlatformCostTab from './PlatformCostTab'
+import BillingTab from './BillingTab'
 import AgentsTab from './AgentsTab'
 import AgentDetailPage from './AgentDetailPage'
 import OrgsTab from './OrgsTab'
@@ -127,6 +128,8 @@ export default function AppShell(): JSX.Element {
         return <AzurePanel />
       case 'platform/cost':
         return <PlatformCostTab />
+      case 'platform/billing':
+        return <BillingTab />
       case 'platform/agents':
         return (
           <AgentsTab
