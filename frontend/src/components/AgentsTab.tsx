@@ -371,7 +371,15 @@ function AgentAlertsPanel() {
   )
 }
 
-function AgentsTab() {
+interface AgentsTabProps {
+  /**
+   * Called when the user clicks an agent row. Optional so callers that don't
+   * yet route to the detail page (and tests) can render this tab unchanged.
+   */
+  onOpenAgent?: (agentName: string) => void
+}
+
+function AgentsTab({ onOpenAgent }: AgentsTabProps = {}) {
   const theme = useTheme()
   const isDark = theme.palette.mode === 'dark'
 
@@ -569,7 +577,12 @@ function AgentsTab() {
                   </TableHead>
                   <TableBody>
                     {dashboard?.agents?.map((agent) => (
-                      <TableRow key={agent.name} hover>
+                      <TableRow
+                        key={agent.name}
+                        hover
+                        onClick={() => onOpenAgent?.(agent.name)}
+                        sx={{ cursor: onOpenAgent ? 'pointer' : 'default' }}
+                      >
                         <TableCell sx={tdSx}>
                           <Typography variant="body2" fontWeight={500}>
                             {agent.display_name}
@@ -647,7 +660,11 @@ function AgentsTab() {
                               : 'Never'}
                           </Typography>
                         </TableCell>
-                        <TableCell align="right" sx={tdSx}>
+                        <TableCell
+                          align="right"
+                          sx={tdSx}
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <Box
                             sx={{
                               display: 'flex',
