@@ -87,11 +87,17 @@ interface ResourceRow {
 }
 
 interface TopResourcesResponse {
-  currency: string
-  period: Period
-  total_resources_reported: number
+  currency?: string
+  period?: Period
+  total_resources_reported?: number
   resources: ResourceRow[]
-  generated_at: string
+  generated_at?: string
+  // Backend returns this when the payer account has NOT opted in to
+  // resource-level CE data. UI renders a friendly enable-in-AWS panel
+  // instead of a red banner. See admin backend costs_top_resources.
+  resourceLevelEnabled?: boolean
+  message?: string
+  helpUrl?: string
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -454,7 +460,7 @@ function PlatformCostTab() {
               <Typography variant="h6" fontWeight={600}>
                 Top {topResources?.total_resources_reported ?? 20} Most Expensive Resources
               </Typography>
-              {topResources && (
+              {topResources?.period && (
                 <Chip
                   size="small"
                   variant="outlined"
@@ -463,6 +469,43 @@ function PlatformCostTab() {
                 />
               )}
             </Box>
+
+            {topResources?.resourceLevelEnabled === false && (
+              <Box
+                sx={{
+                  p: 2.5,
+                  mb: 2,
+                  borderRadius: 1,
+                  border: 1,
+                  borderColor: 'warning.main',
+                  bgcolor: 'action.hover',
+                }}
+              >
+                <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.5 }}>
+                  Resource-level Cost Explorer not enabled
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  {topResources.message ??
+                    'This AWS account has not opted in to resource-level CE data. Enable it in the payer accounts Billing → Cost Explorer → Preferences.'}
+                </Typography>
+                {topResources.helpUrl && (
+                  <Typography variant="body2">
+                    <a
+                      href={topResources.helpUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: 'inherit' }}
+                    >
+                      Open AWS Cost Explorer Settings →
+                    </a>
+                  </Typography>
+                )}
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Data starts populating within ~24 hours after enable. History is not backfilled.
+                </Typography>
+              </Box>
+            )}
+
             <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 560 }}>
               <Table size="small" stickyHeader>
                 <TableHead>

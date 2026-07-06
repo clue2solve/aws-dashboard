@@ -489,6 +489,29 @@ def costs_top_resources(
             },
         )
     except Exception as e:
+        # Resource-level CE data requires an explicit opt-in in the
+        # payer account's Cost Explorer Settings. Detect that specific
+        # AccessDeniedException and return a 200 with a structured
+        # opt-in-needed payload — the frontend renders a helpful empty
+        # state with a link to AWS settings rather than a scary 502.
+        msg = str(e)
+        if "Resource-level data granularity is an opt-in" in msg or (
+            "AccessDeniedException" in msg and "opt-in" in msg
+        ):
+            payload = {
+                "resources": [],
+                "resourceLevelEnabled": False,
+                "message": (
+                    "Resource-level Cost Explorer data is not enabled on this AWS account. "
+                    "Enable it in the payer account's Billing → Cost Explorer → Preferences. "
+                    "Data starts populating within ~24 hours; history is not backfilled."
+                ),
+                "helpUrl": "https://console.aws.amazon.com/cost-management/home#/settings",
+                "days": days,
+                "limit": limit,
+            }
+            _cache_set(cache_key, payload)
+            return payload
         return _ce_error_response(e)
 
     # Aggregate cost per (resource_id, service) across time buckets
