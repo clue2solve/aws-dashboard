@@ -19,6 +19,10 @@ import InvitationsTab from './InvitationsTab'
 import AdministrationTab from './AdministrationTab'
 import DocsTab from './DocsTab'
 import AzurePanel from './AzurePanel'
+import AuditTab from './AuditTab'
+import KpackTab from './KpackTab'
+import PlatformLimitsTab from './PlatformLimitsTab'
+import DomainsTab from './DomainsTab'
 
 // -----------------------------------------------------------------------------
 // The path model. Every leaf in the sidebar owns a slash-delimited path — no
@@ -134,6 +138,14 @@ export default function AppShell(): JSX.Element {
         return <InvitationsTab />
       case 'platform/administration':
         return <AdministrationTab />
+      case 'platform/audit':
+        return <AuditTab />
+      case 'platform/kpack':
+        return <KpackTab />
+      case 'platform/limits':
+        return <PlatformLimitsTab />
+      case 'platform/domains':
+        return <DomainsTab />
       case 'platform/docs':
         return <DocsTab />
       default:
