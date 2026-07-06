@@ -16,6 +16,7 @@ import UsersTab from './UsersTab'
 import GroupsTab from './GroupsTab'
 import RolesTab from './RolesTab'
 import InvitationsTab from './InvitationsTab'
+import AdministrationTab from './AdministrationTab'
 import DocsTab from './DocsTab'
 import AzurePanel from './AzurePanel'
 
@@ -131,6 +132,8 @@ export default function AppShell(): JSX.Element {
         return <RolesTab />
       case 'platform/directory/invitations':
         return <InvitationsTab />
+      case 'platform/administration':
+        return <AdministrationTab />
       case 'platform/docs':
         return <DocsTab />
       default:
