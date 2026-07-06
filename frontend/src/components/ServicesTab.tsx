@@ -41,12 +41,11 @@ const serviceIcons: Record<string, string> = {
 }
 
 // Services that can navigate to specific sub-tabs within the AWS section.
-// Indices match AwsSection sub-tabs (see AWS_SUB): services=0, compute=1,
-// clusters=2, access=3.
-const navigableServices: Record<string, number> = {
-  'EC2': 1,       // Compute sub-tab
-  'EC2 Other': 1, // Compute sub-tab
-  'EKS': 2,       // Clusters sub-tab
+// Paths match the left-nav path model in AppShell / Sidebar.
+const navigablePaths: Record<string, string> = {
+  'EC2': 'infra/aws/compute',
+  'EC2 Other': 'infra/aws/compute',
+  'EKS': 'infra/aws/clusters',
 }
 
 const container = {
@@ -65,7 +64,7 @@ const item = {
 }
 
 interface ServicesTabProps {
-  onNavigateToTab?: (tabIndex: number) => void
+  onNavigateToTab?: (path: string) => void
 }
 
 function ServicesTab({ onNavigateToTab }: ServicesTabProps) {
@@ -149,7 +148,7 @@ function ServicesTab({ onNavigateToTab }: ServicesTabProps) {
               <motion.div variants={item}>
                 {(() => {
                   const serviceLabel = serviceIcons[service.name] || 'AWS'
-                  const isNavigable = serviceLabel in navigableServices
+                  const isNavigable = serviceLabel in navigablePaths
 
                   return (
                     <Card
@@ -166,7 +165,7 @@ function ServicesTab({ onNavigateToTab }: ServicesTabProps) {
                       }}
                       onClick={() => {
                         if (isNavigable && onNavigateToTab) {
-                          onNavigateToTab(navigableServices[serviceLabel])
+                          onNavigateToTab(navigablePaths[serviceLabel])
                         }
                       }}
                     >
