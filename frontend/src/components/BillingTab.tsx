@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Box,
   Card,
@@ -18,6 +18,8 @@ import {
   Link,
   ToggleButtonGroup,
   ToggleButton,
+  Chip,
+  Stack,
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
@@ -27,6 +29,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import TrendingDownIcon from '@mui/icons-material/TrendingDown'
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat'
 import { coordinatorGet, ApiError } from '../api'
+import BillingTrendChart from './BillingTrendChart'
 
 // --- API types (mirror coordinator BillingController record shapes; ------
 // Jackson serializes Java records as camelCase, no naming-strategy override) --
@@ -54,7 +57,13 @@ interface AccountBilling {
   appCount: number
   momPct: number | null
   pricing: PricingOverlay
+  billingEnabled: boolean
+  trialActive: boolean
+  trialExpired: boolean
+  trialEndOn: string | null
 }
+
+type AccountFilter = 'all' | 'billing' | 'trial' | 'expired'
 
 interface ProjectBilling {
   projectId: string
@@ -170,9 +179,22 @@ function InfraTag({ infraUsd }: { infraUsd: number }) {
 
 // --- component ---------------------------------------------------------------
 
+function TrialChip({ trialExpired }: { trialExpired: boolean }) {
+  return (
+    <Chip
+      label={trialExpired ? 'TRIAL EXPIRED' : 'TRIAL'}
+      size="small"
+      variant="outlined"
+      color="warning"
+      sx={{ ml: 1 }}
+    />
+  )
+}
+
 function BillingTab() {
   const [period, setPeriod] = useState<Period>('mtd')
   const [drill, setDrill] = useState<DrillLevel>({ level: 'accounts' })
+  const [accountFilter, setAccountFilter] = useState<AccountFilter>('all')
 
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [accounts, setAccounts] = useState<AccountBilling[] | null>(null)
@@ -188,6 +210,7 @@ function BillingTab() {
   useEffect(() => {
     setDrill({ level: 'accounts' })
     setExpandedAppId(null)
+    setAccountFilter('all')
   }, [period])
 
   useEffect(() => {
@@ -238,10 +261,18 @@ function BillingTab() {
 
   const momMtd = formatMomPct(summary?.momPct)
 
+  const filteredAccounts = useMemo(() => {
+    if (!accounts) return accounts
+    if (accountFilter === 'all') return accounts
+    if (accountFilter === 'billing') return accounts.filter((a) => a.billingEnabled)
+    if (accountFilter === 'trial') return accounts.filter((a) => a.trialActive)
+    return accounts.filter((a) => a.trialExpired)
+  }, [accounts, accountFilter])
+
   return (
     <motion.div variants={container} initial="hidden" animate="show">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-        <Typography variant="h6" fontWeight={600}>Billing</Typography>
+        <Typography variant="h6" fontWeight={600}>Billing & Metering</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
           What each tenant should be charged, based on metered CCU consumption at the retail rate.
         </Typography>
@@ -258,6 +289,8 @@ function BillingTab() {
           <ToggleButton value="30d">Last 30d</ToggleButton>
         </ToggleButtonGroup>
       </Box>
+
+      <BillingTrendChart />
 
       <BreadcrumbTrail drill={drill} onNavigate={setDrill} />
 
@@ -340,37 +373,74 @@ function BillingTab() {
         <motion.div variants={item}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
                 <ReceiptLongIcon color="primary" />
-                <Typography variant="h6" fontWeight={600}>Accounts — {PERIOD_LABELS[period]}</Typography>
+                <Typography variant="h6" fontWeight={600} sx={{ flexGrow: 1 }}>
+                  Accounts — {PERIOD_LABELS[period]}
+                </Typography>
+                <Stack direction="row" spacing={1}>
+                  <Chip
+                    label="All"
+                    size="small"
+                    onClick={() => setAccountFilter('all')}
+                    color={accountFilter === 'all' ? 'primary' : 'default'}
+                    variant={accountFilter === 'all' ? 'filled' : 'outlined'}
+                  />
+                  <Chip
+                    label="Billing"
+                    size="small"
+                    onClick={() => setAccountFilter('billing')}
+                    color={accountFilter === 'billing' ? 'primary' : 'default'}
+                    variant={accountFilter === 'billing' ? 'filled' : 'outlined'}
+                  />
+                  <Chip
+                    label="Trial"
+                    size="small"
+                    onClick={() => setAccountFilter('trial')}
+                    color={accountFilter === 'trial' ? 'primary' : 'default'}
+                    variant={accountFilter === 'trial' ? 'filled' : 'outlined'}
+                  />
+                  <Chip
+                    label="Expired trial"
+                    size="small"
+                    onClick={() => setAccountFilter('expired')}
+                    color={accountFilter === 'expired' ? 'primary' : 'default'}
+                    variant={accountFilter === 'expired' ? 'filled' : 'outlined'}
+                  />
+                </Stack>
               </Box>
               <TableContainer component={Paper} variant="outlined">
                 <Table size="small">
                   <TableHead>
                     <TableRow>
                       <TableCell>Account</TableCell>
-                      <TableCell align="right">Billed</TableCell>
+                      <TableCell align="right">Consumed</TableCell>
+                      <TableCell align="right">Charged</TableCell>
+                      <TableCell align="right">Margin</TableCell>
+                      <TableCell align="right" sx={{ color: 'text.secondary' }}>Infra cost</TableCell>
                       <TableCell align="right">MoM %</TableCell>
                       <TableCell align="right"># Projects</TableCell>
                       <TableCell align="right"># Apps</TableCell>
-                      <TableCell align="right" sx={{ color: 'text.secondary' }}>Infra cost</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {(accounts || []).length === 0 && (
+                    {(filteredAccounts || []).length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={6} align="center">
+                        <TableCell colSpan={8} align="center">
                           <Typography variant="body2" color="text.secondary" sx={{ py: 3 }}>
-                            No billed usage for this period.
+                            No accounts match this filter for this period.
                           </Typography>
                         </TableCell>
                       </TableRow>
                     )}
-                    {(accounts || [])
+                    {(filteredAccounts || [])
                       .slice()
                       .sort((a, b) => b.pricing.retailUsd - a.pricing.retailUsd)
                       .map((a) => {
                         const mom = formatMomPct(a.momPct)
+                        const consumed = a.pricing.retailUsd
+                        const charged = a.billingEnabled ? a.pricing.retailUsd : 0
+                        const margin = a.pricing.retailUsd - a.pricing.infraUsd
                         return (
                           <TableRow
                             key={a.accountId}
@@ -381,22 +451,33 @@ function BillingTab() {
                             }
                           >
                             <TableCell>
-                              <Typography variant="body2" fontWeight={500}>{a.accountName}</Typography>
+                              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                <Typography variant="body2" fontWeight={500}>{a.accountName}</Typography>
+                                {(a.trialActive || a.trialExpired) && (
+                                  <TrialChip trialExpired={a.trialExpired} />
+                                )}
+                              </Box>
                             </TableCell>
                             <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {formatUSD(a.pricing.retailUsd)}
+                              {formatUSD(consumed)}
                             </TableCell>
-                            <TableCell align="right" sx={{ color: mom.color, fontVariantNumeric: 'tabular-nums' }}>
-                              {mom.label}
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {formatUSD(charged)}
                             </TableCell>
-                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{a.projectCount}</TableCell>
-                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{a.appCount}</TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {formatUSD(margin)}
+                            </TableCell>
                             <TableCell
                               align="right"
                               sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
                             >
                               {formatUSD(a.pricing.infraUsd)}
                             </TableCell>
+                            <TableCell align="right" sx={{ color: mom.color, fontVariantNumeric: 'tabular-nums' }}>
+                              {mom.label}
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{a.projectCount}</TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{a.appCount}</TableCell>
                           </TableRow>
                         )
                       })}

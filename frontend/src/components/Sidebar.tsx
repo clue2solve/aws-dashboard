@@ -114,7 +114,7 @@ const TREE: NavNode[] = [
       },
       {
         kind: 'leaf',
-        label: 'Billing',
+        label: 'Billing & Metering',
         path: 'platform/billing',
         Icon: ReceiptLongIcon,
       },
