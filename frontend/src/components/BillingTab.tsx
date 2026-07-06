@@ -50,6 +50,8 @@ interface BillingSummary {
   currency: string
 }
 
+type AccountKind = 'PLATFORM' | 'INTERNAL' | 'TRIAL' | 'TRIAL_EXPIRED' | 'BILLING'
+
 interface AccountBilling {
   accountId: string
   accountName: string
@@ -62,6 +64,7 @@ interface AccountBilling {
   trialExpired: boolean
   trialEndOn: string | null
   isInternal?: boolean
+  kind: AccountKind
 }
 
 type AccountFilter = 'all' | 'billing' | 'trial' | 'expired'
@@ -201,6 +204,81 @@ function InternalChip() {
       color="info"
       sx={{ ml: 1 }}
     />
+  )
+}
+
+function PlatformChip() {
+  return (
+    <Chip
+      label="⚡ PLATFORM"
+      size="small"
+      color="warning"
+      variant="filled"
+      sx={{ ml: 1 }}
+    />
+  )
+}
+
+function sumInfra(rows: AccountBilling[]): number {
+  return rows.reduce((acc, r) => acc + r.pricing.infraUsd, 0)
+}
+
+function sumRetail(rows: AccountBilling[]): number {
+  return rows.reduce((acc, r) => acc + r.pricing.retailUsd, 0)
+}
+
+function BillingPnlCard({ accounts }: { accounts: AccountBilling[] }) {
+  const platformRows = accounts.filter((a) => a.kind === 'PLATFORM')
+  const internalRows = accounts.filter((a) => a.kind === 'INTERNAL')
+  const trialRows = accounts.filter((a) => a.kind === 'TRIAL' || a.kind === 'TRIAL_EXPIRED')
+  const billingRows = accounts.filter((a) => a.kind === 'BILLING')
+
+  const platformExpense = sumInfra(platformRows)
+  const internalExpense = sumInfra(internalRows)
+  const trialWouldRevenue = sumRetail(trialRows)
+  const actualRevenue = sumRetail(billingRows)
+  const totalInfra = sumInfra(accounts)
+  const actualMargin = actualRevenue - totalInfra
+
+  const tiles: { label: string; value: number; color?: string }[] = [
+    { label: 'Platform expense', value: platformExpense },
+    { label: 'Internal expense', value: internalExpense },
+    { label: 'Trial would-revenue', value: trialWouldRevenue },
+    { label: 'Actual revenue', value: actualRevenue },
+    { label: 'Total infra', value: totalInfra },
+    {
+      label: 'Actual margin',
+      value: actualMargin,
+      color: actualMargin >= 0 ? 'success.main' : 'error.main',
+    },
+  ]
+
+  return (
+    <Card sx={{ mb: 3 }}>
+      <CardContent>
+        <Typography variant="subtitle2" color="text.secondary" fontWeight={600} sx={{ mb: 2 }}>
+          P&amp;L summary
+        </Typography>
+        <Grid container spacing={2}>
+          {tiles.map((t) => (
+            <Grid item xs={6} sm={4} md={2} key={t.label}>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  {t.label}
+                </Typography>
+                <Typography
+                  variant="h6"
+                  fontWeight={700}
+                  sx={{ fontVariantNumeric: 'tabular-nums', color: t.color ?? 'text.primary' }}
+                >
+                  {formatUSD(t.value)}
+                </Typography>
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -382,6 +460,12 @@ function BillingTab() {
 
       {!loading && error && <Alert severity="error">{error}</Alert>}
 
+      {!loading && !error && drill.level === 'accounts' && accounts && (
+        <motion.div variants={item}>
+          <BillingPnlCard accounts={accounts} />
+        </motion.div>
+      )}
+
       {!loading && !error && drill.level === 'accounts' && (
         <motion.div variants={item}>
           <Card>
@@ -451,9 +535,19 @@ function BillingTab() {
                       .sort((a, b) => b.pricing.retailUsd - a.pricing.retailUsd)
                       .map((a) => {
                         const mom = formatMomPct(a.momPct)
-                        const consumed = a.pricing.retailUsd
-                        const charged = a.billingEnabled ? a.pricing.retailUsd : 0
-                        const margin = a.pricing.retailUsd - a.pricing.infraUsd
+                        const isExpenseOnly = a.kind === 'PLATFORM' || a.kind === 'INTERNAL'
+                        const isTrialLike = a.kind === 'TRIAL' || a.kind === 'TRIAL_EXPIRED'
+
+                        const consumedDisplay = isExpenseOnly ? '—' : formatUSD(a.pricing.retailUsd)
+                        const chargedDisplay = isExpenseOnly
+                          ? '—'
+                          : isTrialLike
+                            ? '$0.00'
+                            : formatUSD(a.pricing.retailUsd)
+                        const marginDisplay = isExpenseOnly
+                          ? '—'
+                          : formatUSD(a.pricing.retailUsd - a.pricing.infraUsd)
+
                         return (
                           <TableRow
                             key={a.accountId}
@@ -464,22 +558,36 @@ function BillingTab() {
                             }
                           >
                             <TableCell>
-                              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <Typography variant="body2" fontWeight={500}>{a.accountName}</Typography>
-                                {a.isInternal && <InternalChip />}
-                                {(a.trialActive || a.trialExpired) && (
-                                  <TrialChip trialExpired={a.trialExpired} />
+                                {a.projectCount === 1 && (
+                                  <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                                    · 1 project
+                                  </Typography>
                                 )}
+                                {a.kind === 'PLATFORM' && <PlatformChip />}
+                                {a.kind === 'INTERNAL' && <InternalChip />}
+                                {isTrialLike && <TrialChip trialExpired={a.kind === 'TRIAL_EXPIRED'} />}
                               </Box>
                             </TableCell>
                             <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {formatUSD(consumed)}
+                              {consumedDisplay}
+                              {isTrialLike && (
+                                <Typography variant="caption" display="block" color="text.secondary">
+                                  would-bill
+                                </Typography>
+                              )}
                             </TableCell>
                             <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {formatUSD(charged)}
+                              {chargedDisplay}
                             </TableCell>
                             <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {formatUSD(margin)}
+                              {marginDisplay}
+                              {isTrialLike && (
+                                <Typography variant="caption" display="block" color="text.secondary">
+                                  would-margin
+                                </Typography>
+                              )}
                             </TableCell>
                             <TableCell
                               align="right"
