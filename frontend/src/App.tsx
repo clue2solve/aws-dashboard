@@ -113,7 +113,7 @@ function App() {
         <Toolbar>
           <CloudIcon sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Platform Admin — Clue2App
+            Clue2App - Administration
           </Typography>
         </Toolbar>
       </AppBar>

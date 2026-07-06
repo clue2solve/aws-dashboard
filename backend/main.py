@@ -510,7 +510,7 @@ def costs_top_resources(
                 "days": days,
                 "limit": limit,
             }
-            _cache_set(cache_key, payload)
+            _cache_put(cache_key, payload)
             return payload
         return _ce_error_response(e)
 
