@@ -171,7 +171,7 @@ export default function AppShell(): JSX.Element {
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <AppBar position="sticky" elevation={0}>
         <Toolbar>
-          <CloudIcon sx={{ mr: 2 }} />
+          <CloudIcon sx={{ mr: 2, color: 'primary.light' }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Clue2App - Administration
           </Typography>
