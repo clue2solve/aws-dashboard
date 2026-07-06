@@ -1,0 +1,70 @@
+# Paketo project descriptor for the admin SPA.
+#
+# The kpack Image's source.git.subPath is `aws-dashboard/frontend` so this
+# file sits at the build-context root, alongside package.json and nginx.conf.
+#
+# Two buildpacks run in sequence:
+#   1. paketo-buildpacks/nodejs — installs deps, runs `npm run build`,
+#                                 produces dist/ (Vite output).
+#   2. paketo-buildpacks/nginx  — detects nginx.conf, serves dist/ on $PORT.
+
+[project]
+name = "admin"
+version = "1.0.0"
+
+[[project.licenses]]
+type = "MIT"
+
+[build]
+exclude = [
+  "*.md",
+  ".git",
+  ".gitignore",
+  "node_modules",
+  "dist",
+  "*.log",
+  ".env*.local",
+]
+
+[[build.buildpacks]]
+uri = "paketo-buildpacks/nodejs"
+
+[[build.buildpacks]]
+uri = "paketo-buildpacks/nginx"
+
+# ------------------------------------------------------------------
+# Node buildpack: run vite build, hand dist/ off to nginx.
+# ------------------------------------------------------------------
+
+# Paketo libatomic gotcha — pin Node 22.* so run-jammy-base has libatomic.so.1.
+[[build.env]]
+name = "BP_NODE_VERSION"
+value = "22.*.*"
+
+# Runs `npm run build` → dist/.
+[[build.env]]
+name = "BP_NODE_RUN_SCRIPTS"
+value = "build"
+
+# Keep only what the launch image needs; prune node_modules, src, etc.
+[[build.env]]
+name = "BP_KEEP_FILES"
+value = "dist/*:nginx.conf"
+
+# ------------------------------------------------------------------
+# Nginx buildpack: point at the config we ship.
+# ------------------------------------------------------------------
+
+[[build.env]]
+name = "BP_NGINX_CONF_LOCATION"
+value = "./nginx.conf"
+
+# ------------------------------------------------------------------
+# Build-time API base — Vite bakes VITE_* env vars into the bundle.
+# Override per environment by setting `build.env` on the kpack Image
+# (e.g. `c2a set env --app admin VITE_ADMIN_API_URL=...` then
+# `c2a rebuild app --app admin`).
+# ------------------------------------------------------------------
+[[build.env]]
+name = "VITE_ADMIN_API_URL"
+value = "https://admin-api.control.apps.clue2.app"
