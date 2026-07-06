@@ -11,6 +11,9 @@ import PlatformCostTab from './PlatformCostTab'
 import AgentsTab from './AgentsTab'
 import AgentDetailPage from './AgentDetailPage'
 import OrgsTab from './OrgsTab'
+import UsersTab from './UsersTab'
+import GroupsTab from './GroupsTab'
+import RolesTab from './RolesTab'
 import DocsTab from './DocsTab'
 import AzurePanel from './AzurePanel'
 
@@ -133,26 +136,11 @@ export default function AppShell(): JSX.Element {
       case 'platform/directory/orgs':
         return <OrgsTab />
       case 'platform/directory/users':
-        return (
-          <DirectoryStub
-            name="Users"
-            blockedOn="coordinator GET /api/users cross-tenant list (SYSTEM only) — next PR"
-          />
-        )
+        return <UsersTab />
       case 'platform/directory/groups':
-        return (
-          <DirectoryStub
-            name="Groups"
-            blockedOn="coordinator Groups CRUD API (RBAC Step 4+ tracked in memory)"
-          />
-        )
+        return <GroupsTab />
       case 'platform/directory/roles':
-        return (
-          <DirectoryStub
-            name="Roles"
-            blockedOn="coordinator GET /api/roles cross-tenant list (SYSTEM only) — next PR"
-          />
-        )
+        return <RolesTab />
       case 'platform/directory/invitations':
         return (
           <DirectoryStub
