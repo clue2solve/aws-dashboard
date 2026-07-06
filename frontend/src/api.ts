@@ -115,3 +115,47 @@ export async function coordinatorPost<T>(path: string, body?: unknown): Promise<
   }
   return (await response.json()) as T
 }
+
+// Same cross-app fetch idiom as coordinatorPost, but for PUT calls
+// (e.g. updating a feature flag).
+export async function coordinatorPut<T>(path: string, body?: unknown): Promise<T> {
+  const token = getToken()
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  headers.set('Content-Type', 'application/json')
+  const response = await fetch(`${COORDINATOR_BASE_URL}${path}`, {
+    method: 'PUT',
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!response.ok) {
+    let respBody: unknown = null
+    try { respBody = await response.json() } catch { /* ignore */ }
+    const message =
+      (respBody as { message?: string } | null)?.message ||
+      `Coordinator request failed with status ${response.status}`
+    throw new ApiError(response.status, message, respBody)
+  }
+  return (await response.json()) as T
+}
+
+// Same cross-app fetch idiom as coordinatorPost, but for DELETE calls.
+// Coordinator DELETE endpoints return 204 No Content, so we don't attempt
+// to parse a JSON body on success.
+export async function coordinatorDelete(path: string): Promise<void> {
+  const token = getToken()
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${COORDINATOR_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers,
+  })
+  if (!response.ok) {
+    let respBody: unknown = null
+    try { respBody = await response.json() } catch { /* ignore */ }
+    const message =
+      (respBody as { message?: string } | null)?.message ||
+      `Coordinator request failed with status ${response.status}`
+    throw new ApiError(response.status, message, respBody)
+  }
+}

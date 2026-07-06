@@ -26,6 +26,7 @@ import GroupsIcon from '@mui/icons-material/Groups'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import MailOutlineIcon from '@mui/icons-material/MailOutline'
 import MenuBookIcon from '@mui/icons-material/MenuBook'
+import SettingsIcon from '@mui/icons-material/Settings'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 
@@ -161,6 +162,12 @@ const TREE: NavNode[] = [
             Icon: MailOutlineIcon,
           },
         ],
+      },
+      {
+        kind: 'leaf',
+        label: 'Administration',
+        path: 'platform/administration',
+        Icon: SettingsIcon,
       },
       {
         kind: 'leaf',
