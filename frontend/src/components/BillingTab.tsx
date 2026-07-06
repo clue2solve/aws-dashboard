@@ -61,6 +61,7 @@ interface AccountBilling {
   trialActive: boolean
   trialExpired: boolean
   trialEndOn: string | null
+  isInternal?: boolean
 }
 
 type AccountFilter = 'all' | 'billing' | 'trial' | 'expired'
@@ -186,6 +187,18 @@ function TrialChip({ trialExpired }: { trialExpired: boolean }) {
       size="small"
       variant="outlined"
       color="warning"
+      sx={{ ml: 1 }}
+    />
+  )
+}
+
+function InternalChip() {
+  return (
+    <Chip
+      label="INTERNAL"
+      size="small"
+      variant="outlined"
+      color="info"
       sx={{ ml: 1 }}
     />
   )
@@ -453,6 +466,7 @@ function BillingTab() {
                             <TableCell>
                               <Box sx={{ display: 'flex', alignItems: 'center' }}>
                                 <Typography variant="body2" fontWeight={500}>{a.accountName}</Typography>
+                                {a.isInternal && <InternalChip />}
                                 {(a.trialActive || a.trialExpired) && (
                                   <TrialChip trialExpired={a.trialExpired} />
                                 )}
