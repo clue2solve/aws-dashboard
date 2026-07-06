@@ -69,3 +69,25 @@ export async function apiGet<T>(url: string): Promise<T> {
   }
   return (await response.json()) as T
 }
+
+// Cross-app fetches to the coordinator (a different host). Same c2a_token
+// bearer, but the target isn't the admin backend so apiFetch's 401→SSO
+// bounce would loop through the wrong host. Instead we surface the 401 as
+// an ApiError and let the caller decide.
+export const COORDINATOR_BASE_URL = 'https://coordinator.control.apps.clue2.app'
+
+export async function coordinatorGet<T>(path: string): Promise<T> {
+  const token = getToken()
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${COORDINATOR_BASE_URL}${path}`, { method: 'GET', headers })
+  if (!response.ok) {
+    let body: unknown = null
+    try { body = await response.json() } catch { /* ignore */ }
+    const message =
+      (body as { message?: string } | null)?.message ||
+      `Coordinator request failed with status ${response.status}`
+    throw new ApiError(response.status, message, body)
+  }
+  return (await response.json()) as T
+}
