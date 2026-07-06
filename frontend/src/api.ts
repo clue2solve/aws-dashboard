@@ -116,8 +116,8 @@ export async function coordinatorPost<T>(path: string, body?: unknown): Promise<
   return (await response.json()) as T
 }
 
-// Same cross-app fetch idiom as coordinatorPost, but for PUT calls
-// (e.g. updating a feature flag).
+// Same cross-app fetch idiom as coordinatorPost, but for PUT calls (updates
+// to existing kpack/domain resources that carry a resourceVersion).
 export async function coordinatorPut<T>(path: string, body?: unknown): Promise<T> {
   const token = getToken()
   const headers = new Headers()
@@ -139,10 +139,10 @@ export async function coordinatorPut<T>(path: string, body?: unknown): Promise<T
   return (await response.json()) as T
 }
 
-// Same cross-app fetch idiom as coordinatorPost, but for DELETE calls.
-// Coordinator DELETE endpoints return 204 No Content, so we don't attempt
-// to parse a JSON body on success.
-export async function coordinatorDelete(path: string): Promise<void> {
+// Same cross-app fetch idiom as coordinatorPost, but for DELETE calls. Some
+// coordinator delete endpoints return 204 No Content, so we don't assume a
+// JSON body on success.
+export async function coordinatorDelete<T = void>(path: string): Promise<T> {
   const token = getToken()
   const headers = new Headers()
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -157,5 +157,10 @@ export async function coordinatorDelete(path: string): Promise<void> {
       (respBody as { message?: string } | null)?.message ||
       `Coordinator request failed with status ${response.status}`
     throw new ApiError(response.status, message, respBody)
+  }
+  try {
+    return (await response.json()) as T
+  } catch {
+    return undefined as T
   }
 }

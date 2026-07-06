@@ -29,6 +29,10 @@ import MenuBookIcon from '@mui/icons-material/MenuBook'
 import SettingsIcon from '@mui/icons-material/Settings'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import FindInPageIcon from '@mui/icons-material/FindInPage'
+import LayersIcon from '@mui/icons-material/Layers'
+import SpeedIcon from '@mui/icons-material/Speed'
+import LanguageIcon from '@mui/icons-material/Language'
 
 // -----------------------------------------------------------------------------
 // Nav-tree model. Kept declarative so the render below is a straightforward
@@ -124,6 +128,30 @@ const TREE: NavNode[] = [
         label: 'Agents',
         path: 'platform/agents',
         Icon: SmartToyIcon,
+      },
+      {
+        kind: 'leaf',
+        label: 'Audit',
+        path: 'platform/audit',
+        Icon: FindInPageIcon,
+      },
+      {
+        kind: 'leaf',
+        label: 'kpack',
+        path: 'platform/kpack',
+        Icon: LayersIcon,
+      },
+      {
+        kind: 'leaf',
+        label: 'Limits',
+        path: 'platform/limits',
+        Icon: SpeedIcon,
+      },
+      {
+        kind: 'leaf',
+        label: 'Domains',
+        path: 'platform/domains',
+        Icon: LanguageIcon,
       },
       {
         kind: 'parent',
