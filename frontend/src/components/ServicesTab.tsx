@@ -40,11 +40,13 @@ const serviceIcons: Record<string, string> = {
   'Amazon Elastic File System': 'EFS',
 }
 
-// Services that can navigate to specific tabs
+// Services that can navigate to specific sub-tabs within the AWS section.
+// Indices match AwsSection sub-tabs (see AWS_SUB): services=0, compute=1,
+// clusters=2, access=3.
 const navigableServices: Record<string, number> = {
-  'EC2': 1,       // Compute tab
-  'EC2 Other': 1, // Compute tab
-  'EKS': 4,       // Clusters tab (Cost at 2, Agents at 3, Clusters at 4)
+  'EC2': 1,       // Compute sub-tab
+  'EC2 Other': 1, // Compute sub-tab
+  'EKS': 2,       // Clusters sub-tab
 }
 
 const container = {

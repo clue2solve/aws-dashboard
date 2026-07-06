@@ -13,13 +13,9 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import CloudIcon from '@mui/icons-material/Cloud'
 import CloseIcon from '@mui/icons-material/Close'
-import ServicesTab from './components/ServicesTab'
-import AccessTab from './components/AccessTab'
 import ClusterTab from './components/ClusterTab'
-import ComputeTab from './components/ComputeTab'
-import PlatformCostTab from './components/PlatformCostTab'
-import AgentsTab from './components/AgentsTab'
-import DocsTab from './components/DocsTab'
+import AwsSection from './components/AwsSection'
+import PlatformSection from './components/PlatformSection'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -45,24 +41,37 @@ function TabPanel({ children, value, index }: TabPanelProps) {
   )
 }
 
+// Top-level nav: only two sections. Each renders its own sub-tab bar.
+// - AWS      → Services / Compute / Clusters / Access
+// - Platform → Cost / Agents / Directory / Docs
+//
+// Rationale: separates cloud infra from c2a-platform surfaces cleanly.
+// Directory nests under Platform (Orgs/Users/Groups/Roles/Invitations)
+// because those are c2a-platform tenants, not AWS-side users.
+const TOP = {
+  aws: 0,
+  platform: 1,
+} as const
+
 function App() {
-  // Check for cluster query param
+  // Deep-link support: ?cluster=NAME opens a focused single-cluster view
+  // (unchanged behavior). Without focused view, we still open on AWS→Clusters
+  // when the param is present.
   const urlParams = useMemo(() => new URLSearchParams(window.location.search), [])
   const initialCluster = urlParams.get('cluster')
-  const isFocusedView = !!initialCluster // Focused view when cluster param exists
+  const isFocusedView = !!initialCluster
 
-  // If cluster param exists, start on Clusters tab (index 4 after Agents tab was inserted at 3)
-  const [tabValue, setTabValue] = useState(initialCluster ? 4 : 0)
+  // With ?cluster, we intentionally start on AWS section — Clusters sub-tab
+  // opens itself via AwsSection's initialSub prop below.
+  const [tabValue, setTabValue] = useState<number>(TOP.aws)
 
   const handleTabChange = (_: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue)
   }
 
-  // Focused cluster-only view
   if (isFocusedView) {
     return (
       <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-        {/* Minimal header */}
         <Box
           sx={{
             bgcolor: 'primary.main',
@@ -91,7 +100,6 @@ function App() {
           </IconButton>
         </Box>
 
-        {/* Cluster content only */}
         <Box sx={{ p: 2, height: 'calc(100vh - 48px)', overflow: 'auto' }}>
           <ClusterTab initialCluster={initialCluster} focusedView />
         </Box>
@@ -99,14 +107,13 @@ function App() {
     )
   }
 
-  // Normal dashboard view
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <AppBar position="static" elevation={0}>
         <Toolbar>
           <CloudIcon sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            AWS Dashboard - Clue2Solve
+            Platform Admin — Clue2App
           </Typography>
         </Toolbar>
       </AppBar>
@@ -129,37 +136,17 @@ function App() {
                 },
               }}
             >
-              <Tab label="Services" />
-              <Tab label="Compute" />
-              <Tab label="Cost" />
-              <Tab label="Agents" />
-              <Tab label="Clusters" />
-              <Tab label="Users & Access" />
-              <Tab label="Docs" />
+              <Tab label="AWS" />
+              <Tab label="Platform" />
             </Tabs>
           </Box>
         </motion.div>
 
-        <TabPanel value={tabValue} index={0}>
-          <ServicesTab onNavigateToTab={setTabValue} />
+        <TabPanel value={tabValue} index={TOP.aws}>
+          <AwsSection initialCluster={null} />
         </TabPanel>
-        <TabPanel value={tabValue} index={1}>
-          <ComputeTab />
-        </TabPanel>
-        <TabPanel value={tabValue} index={2}>
-          <PlatformCostTab />
-        </TabPanel>
-        <TabPanel value={tabValue} index={3}>
-          <AgentsTab />
-        </TabPanel>
-        <TabPanel value={tabValue} index={4}>
-          <ClusterTab initialCluster={null} />
-        </TabPanel>
-        <TabPanel value={tabValue} index={5}>
-          <AccessTab />
-        </TabPanel>
-        <TabPanel value={tabValue} index={6}>
-          <DocsTab />
+        <TabPanel value={tabValue} index={TOP.platform}>
+          <PlatformSection />
         </TabPanel>
       </Container>
     </Box>
