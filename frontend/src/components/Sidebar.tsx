@@ -17,6 +17,7 @@ import HubIcon from '@mui/icons-material/Hub'
 import VpnKeyIcon from '@mui/icons-material/VpnKey'
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import GroupWorkIcon from '@mui/icons-material/GroupWork'
 import BusinessIcon from '@mui/icons-material/Business'
@@ -110,6 +111,12 @@ const TREE: NavNode[] = [
         label: 'Cost',
         path: 'platform/cost',
         Icon: AttachMoneyIcon,
+      },
+      {
+        kind: 'leaf',
+        label: 'Billing',
+        path: 'platform/billing',
+        Icon: ReceiptLongIcon,
       },
       {
         kind: 'leaf',

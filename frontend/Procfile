@@ -1,0 +1,1 @@
+web: nginx -p /workspace -c /workspace/nginx.conf -g "daemon off; pid /tmp/nginx.pid;"
