@@ -91,3 +91,27 @@ export async function coordinatorGet<T>(path: string): Promise<T> {
   }
   return (await response.json()) as T
 }
+
+// Same cross-app fetch idiom as coordinatorGet, but for POST calls that
+// carry a JSON body (e.g. minting/revoking invitations). Body may be
+// omitted for POST endpoints that don't take one.
+export async function coordinatorPost<T>(path: string, body?: unknown): Promise<T> {
+  const token = getToken()
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  headers.set('Content-Type', 'application/json')
+  const response = await fetch(`${COORDINATOR_BASE_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!response.ok) {
+    let respBody: unknown = null
+    try { respBody = await response.json() } catch { /* ignore */ }
+    const message =
+      (respBody as { message?: string } | null)?.message ||
+      `Coordinator request failed with status ${response.status}`
+    throw new ApiError(response.status, message, respBody)
+  }
+  return (await response.json()) as T
+}

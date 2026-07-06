@@ -15,6 +15,7 @@ import OrgsTab from './OrgsTab'
 import UsersTab from './UsersTab'
 import GroupsTab from './GroupsTab'
 import RolesTab from './RolesTab'
+import InvitationsTab from './InvitationsTab'
 import DocsTab from './DocsTab'
 import AzurePanel from './AzurePanel'
 
@@ -39,22 +40,6 @@ function writeHashPath(path: string) {
   if (window.location.hash !== target) {
     window.location.hash = target
   }
-}
-
-// Small centered stub for directory sub-paths that don't have a component yet.
-function DirectoryStub({ name, blockedOn }: { name: string; blockedOn: string }) {
-  return (
-    <Box sx={{ p: 4 }}>
-      <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', maxWidth: 640, mx: 'auto' }}>
-        <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
-          {name}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Coming soon. Blocked on: <strong>{blockedOn}</strong>.
-        </Typography>
-      </Paper>
-    </Box>
-  )
 }
 
 function NotFound({ path }: { path: string }) {
@@ -145,12 +130,7 @@ export default function AppShell(): JSX.Element {
       case 'platform/directory/roles':
         return <RolesTab />
       case 'platform/directory/invitations':
-        return (
-          <DirectoryStub
-            name="Invitations"
-            blockedOn="operator wizard PR (new account + single-project user invites — migrating from console PRs 2/3/4)"
-          />
-        )
+        return <InvitationsTab />
       case 'platform/docs':
         return <DocsTab />
       default:
