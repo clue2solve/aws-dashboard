@@ -1,42 +1,16 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { ThemeProvider, createTheme, CssBaseline, Box, Typography, Button } from '@mui/material'
+import { ThemeProvider, CssBaseline, Box, Typography, Button } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
 import { jwtDecode } from 'jwt-decode'
 import App from './App'
+import { adminTheme as theme } from './theme'
 import {
   getToken,
   setToken,
   clearToken,
   redirectToLogin,
 } from './api'
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: {
-      main: '#232F3E', // AWS dark blue
-    },
-    secondary: {
-      main: '#FF9900', // AWS orange
-    },
-    background: {
-      default: '#f5f5f5',
-    },
-  },
-  typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-  },
-  components: {
-    MuiCard: {
-      styleOverrides: {
-        root: {
-          borderRadius: 12,
-        },
-      },
-    },
-  },
-})
 
 interface JwtClaims {
   sub?: string
