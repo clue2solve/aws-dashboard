@@ -20,6 +20,8 @@ import {
   ToggleButton,
   Chip,
   Stack,
+  Divider,
+  Button,
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
@@ -28,8 +30,40 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import TrendingDownIcon from '@mui/icons-material/TrendingDown'
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat'
-import { coordinatorGet, ApiError } from '../api'
+import { coordinatorGet, apiGet, ApiError } from '../api'
 import BillingTrendChart from './BillingTrendChart'
+
+// --- Cost Explorer API types (mirror admin backend /api/costs/* shapes; -----
+// same interfaces as PlatformCostTab.tsx — keep field names in sync) ---------
+
+interface CePeriod {
+  start: string
+  end: string
+}
+
+interface CeSummary {
+  currency: string
+  mtd: CePeriod & { cost: number }
+  previous_month: CePeriod & { cost: number }
+  previous_month_to_date: CePeriod & { cost: number; note?: string }
+  delta_pct: number | null
+  delta_pct_basis: string
+  generated_at: string
+}
+
+interface CeServiceRow {
+  service: string
+  cost: number
+  pct_of_total: number
+}
+
+interface CeByService {
+  currency: string
+  period: CePeriod
+  total: number
+  services: CeServiceRow[]
+  generated_at: string
+}
 
 // --- API types (mirror coordinator BillingController record shapes; ------
 // Jackson serializes Java records as camelCase, no naming-strategy override) --
@@ -227,7 +261,17 @@ function sumRetail(rows: AccountBilling[]): number {
   return rows.reduce((acc, r) => acc + r.pricing.retailUsd, 0)
 }
 
-function BillingPnlCard({ accounts }: { accounts: AccountBilling[] }) {
+function BillingPnlCard({
+  accounts,
+  ceSummary,
+  ceByService,
+}: {
+  accounts: AccountBilling[]
+  ceSummary: CeSummary | null
+  ceByService: CeByService | null
+}) {
+  const [showBreakdown, setShowBreakdown] = useState(false)
+
   const platformRows = accounts.filter((a) => a.kind === 'PLATFORM')
   const internalRows = accounts.filter((a) => a.kind === 'INTERNAL')
   const trialRows = accounts.filter((a) => a.kind === 'TRIAL' || a.kind === 'TRIAL_EXPIRED')
@@ -239,6 +283,14 @@ function BillingPnlCard({ accounts }: { accounts: AccountBilling[] }) {
   const actualRevenue = sumRetail(billingRows)
   const totalInfra = sumInfra(accounts)
   const actualMargin = actualRevenue - totalInfra
+
+  // No per-account Daari infra rollup exists yet (daari_cost_events is
+  // CCU/rate-based, not AWS-actual) — hardcode until billing-by-account
+  // grows a daariUsd field.
+  const totalDaari = 0
+
+  const awsActual = ceSummary?.mtd.cost ?? null
+  const unattributed = awsActual == null ? null : Math.max(0, awsActual - totalInfra - totalDaari)
 
   const tiles: { label: string; value: number; color?: string }[] = [
     { label: 'Platform expense', value: platformExpense },
@@ -277,6 +329,85 @@ function BillingPnlCard({ accounts }: { accounts: AccountBilling[] }) {
             </Grid>
           ))}
         </Grid>
+
+        {awsActual != null && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Grid container spacing={2}>
+              <Grid item xs={6} sm={4} md={2}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    AWS actual
+                  </Typography>
+                  <Typography variant="h6" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {formatUSD(awsActual)}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', fontStyle: 'italic' }}
+                  >
+                    As of {new Date(ceSummary!.generated_at).toLocaleString()} · CE settles with 24-48h lag
+                  </Typography>
+                </Box>
+              </Grid>
+              <Grid item xs={6} sm={4} md={2}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    Unattributed infra
+                  </Typography>
+                  <Typography
+                    variant="h6"
+                    fontWeight={700}
+                    sx={{
+                      fontVariantNumeric: 'tabular-nums',
+                      color: (unattributed ?? 0) > totalInfra * 0.5 ? 'warning.main' : 'text.primary',
+                    }}
+                  >
+                    {formatUSD(unattributed ?? 0)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    AWS actual − Total infra − Daari
+                  </Typography>
+                </Box>
+              </Grid>
+            </Grid>
+          </>
+        )}
+
+        {ceByService && (
+          <>
+            <Button size="small" onClick={() => setShowBreakdown((v) => !v)} sx={{ mt: 1 }}>
+              {showBreakdown ? 'Hide' : 'Show'} AWS service breakdown
+            </Button>
+            {showBreakdown && (
+              <TableContainer component={Paper} variant="outlined" sx={{ mt: 1 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Service</TableCell>
+                      <TableCell align="right">Cost</TableCell>
+                      <TableCell align="right">% of total</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {ceByService.services.slice(0, 5).map((s) => (
+                      <TableRow key={s.service}>
+                        <TableCell>{s.service}</TableCell>
+                        <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {formatUSD(s.cost)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {s.pct_of_total.toFixed(1)}%
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   )
@@ -292,6 +423,8 @@ function BillingTab() {
   const [projects, setProjects] = useState<ProjectBilling[] | null>(null)
   const [apps, setApps] = useState<AppBilling[] | null>(null)
   const [expandedAppId, setExpandedAppId] = useState<string | null>(null)
+  const [ceSummary, setCeSummary] = useState<CeSummary | null>(null)
+  const [ceByService, setCeByService] = useState<CeByService | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -311,13 +444,17 @@ function BillingTab() {
       setError(null)
       try {
         if (drill.level === 'accounts') {
-          const [s, a] = await Promise.all([
+          const [s, a, ceS, ceB] = await Promise.all([
             coordinatorGet<BillingSummary>(`/api/v1/billing/summary?period=${period}`),
             coordinatorGet<AccountBilling[]>(`/api/v1/billing/by-account?period=${period}`),
+            apiGet<CeSummary>('/api/costs/summary').catch(() => null),
+            apiGet<CeByService>('/api/costs/by-service?months=1').catch(() => null),
           ])
           if (cancelled) return
           setSummary(s)
           setAccounts(a)
+          setCeSummary(ceS)
+          setCeByService(ceB)
         } else if (drill.level === 'projects') {
           const p = await coordinatorGet<ProjectBilling[]>(
             `/api/v1/billing/by-project?accountId=${drill.accountId}&period=${period}`,
@@ -462,7 +599,7 @@ function BillingTab() {
 
       {!loading && !error && drill.level === 'accounts' && accounts && (
         <motion.div variants={item}>
-          <BillingPnlCard accounts={accounts} />
+          <BillingPnlCard accounts={accounts} ceSummary={ceSummary} ceByService={ceByService} />
         </motion.div>
       )}
 
