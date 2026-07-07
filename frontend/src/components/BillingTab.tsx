@@ -32,6 +32,7 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown'
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat'
 import { coordinatorGet, apiGet, ApiError } from '../api'
 import BillingTrendChart from './BillingTrendChart'
+import HistoricalRateChart from './HistoricalRateChart'
 
 // --- Cost Explorer API types (mirror admin backend /api/costs/* shapes; -----
 // same interfaces as PlatformCostTab.tsx — keep field names in sync) ---------
@@ -74,6 +75,37 @@ interface PricingOverlay {
   retailUsd: number
   marginUsd: number
   currency: string
+}
+
+// --- New CCU rate model (pricing_config design, 2026-07) --------------------
+// Coordinator/core still return the legacy `infraUsd`/`retailUsd` pair
+// (0.005 / 0.015 per CCU-hr). Until BillingController grows the
+// `overheadUsd`/`taxUsd`/`subtotalUsd` fields natively, we derive the full
+// decomposition client-side from `ccuHours` using the published constants so
+// the UI can show the honest per-app total-cost-of-ownership breakdown.
+// Once the backend PricingConfig bean ships, replace this with the real
+// fields from the API response.
+export const INFRA_RATE_PER_CCU_HOUR = 0.005
+export const OVERHEAD_RATE_PER_CCU_HOUR = 0.131
+export const TAX_MULTIPLIER = 2.0
+export const RETAIL_RATE_PER_CCU_HOUR = (INFRA_RATE_PER_CCU_HOUR + OVERHEAD_RATE_PER_CCU_HOUR) * TAX_MULTIPLIER // 0.272
+
+interface RateDecomposition {
+  ccuHours: number
+  computeUsd: number
+  overheadUsd: number
+  subtotalUsd: number
+  taxUsd: number
+  retailUsd: number
+}
+
+function decomposeRate(ccuHours: number): RateDecomposition {
+  const computeUsd = ccuHours * INFRA_RATE_PER_CCU_HOUR
+  const overheadUsd = ccuHours * OVERHEAD_RATE_PER_CCU_HOUR
+  const subtotalUsd = computeUsd + overheadUsd
+  const retailUsd = subtotalUsd * TAX_MULTIPLIER
+  const taxUsd = retailUsd - subtotalUsd
+  return { ccuHours, computeUsd, overheadUsd, subtotalUsd, taxUsd, retailUsd }
 }
 
 interface BillingSummary {
@@ -215,6 +247,56 @@ function InfraTag({ infraUsd }: { infraUsd: number }) {
   )
 }
 
+// "Fixed overhead in CCU rate" info tile — explains what's baked into the
+// $0.272/CCU-hr retail rate so a per-app bill is legible instead of looking
+// like an arbitrary multiplier on raw compute.
+function RateInfoTile() {
+  return (
+    <Card sx={{ mb: 3, borderStyle: 'dashed', borderWidth: 1, borderColor: 'divider' }} variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+          Fixed overhead in CCU rate
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Every CCU-hr billed carries a fixed control-plane, shared-infra, and dev-cost
+          overhead so per-app bills reflect total cost of ownership, not just raw compute.
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={6} sm={3}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Compute</Typography>
+            <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              ${INFRA_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+            </Typography>
+            <Typography variant="caption" color="text.secondary">Runtime + build direct usage</Typography>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overhead</Typography>
+            <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              ${OVERHEAD_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+            </Typography>
+            <Typography variant="caption" color="text.secondary">Fixed + shared AWS + non-cloud dev cost</Typography>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Platform tax</Typography>
+            <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              ×{TAX_MULTIPLIER.toFixed(1)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">Explicit margin multiplier</Typography>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Retail rate</Typography>
+            <Typography variant="body1" fontWeight={700} color="primary.main" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              ${RETAIL_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+            </Typography>
+            <Typography variant="caption" color="text.secondary">(Compute + Overhead) × tax</Typography>
+          </Grid>
+        </Grid>
+      </CardContent>
+    </Card>
+  )
+}
+
+
 // --- component ---------------------------------------------------------------
 
 function TrialChip({ trialExpired }: { trialExpired: boolean }) {
@@ -261,6 +343,14 @@ function sumRetail(rows: AccountBilling[]): number {
   return rows.reduce((acc, r) => acc + r.pricing.retailUsd, 0)
 }
 
+// Overhead (fixed control-plane + shared observability/egress + non-cloud
+// dev cost) is now folded into the per-CCU-hr rate rather than left as a
+// mystery "Unattributed" bucket. Deriving it from ccuHours means it rolls up
+// account -> summary the same way infra/retail already do.
+function sumOverhead(rows: AccountBilling[]): number {
+  return rows.reduce((acc, r) => acc + r.pricing.ccuHours * OVERHEAD_RATE_PER_CCU_HOUR, 0)
+}
+
 function BillingPnlCard({
   accounts,
   ceSummary,
@@ -289,8 +379,14 @@ function BillingPnlCard({
   // grows a daariUsd field.
   const totalDaari = 0
 
+  // Fixed/shared/dev overhead attributed across all accounts via the CCU
+  // rate — this is dollars that used to show up as "Unattributed infra"
+  // because the old 0.015 retail rate didn't carry an overhead component.
+  const totalOverhead = sumOverhead(accounts)
+
   const awsActual = ceSummary?.mtd.cost ?? null
-  const unattributed = awsActual == null ? null : Math.max(0, awsActual - totalInfra - totalDaari)
+  const unattributed =
+    awsActual == null ? null : Math.max(0, awsActual - totalInfra - totalDaari - totalOverhead)
 
   const tiles: { label: string; value: number; color?: string }[] = [
     { label: 'Platform expense', value: platformExpense },
@@ -354,6 +450,19 @@ function BillingPnlCard({
               <Grid item xs={6} sm={4} md={2}>
                 <Box>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    Overhead attributed
+                  </Typography>
+                  <Typography variant="h6" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {formatUSD(totalOverhead)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    Now folded into per-account CCU rate
+                  </Typography>
+                </Box>
+              </Grid>
+              <Grid item xs={6} sm={4} md={2}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                     Unattributed infra
                   </Typography>
                   <Typography
@@ -367,7 +476,7 @@ function BillingPnlCard({
                     {formatUSD(unattributed ?? 0)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                    AWS actual − Total infra − Daari
+                    AWS actual − Total infra − Overhead − Daari
                   </Typography>
                 </Box>
               </Grid>
@@ -518,7 +627,11 @@ function BillingTab() {
         </ToggleButtonGroup>
       </Box>
 
+      <RateInfoTile />
+
       <BillingTrendChart />
+
+      <HistoricalRateChart />
 
       <BreadcrumbTrail drill={drill} onNavigate={setDrill} />
 
@@ -835,15 +948,16 @@ function BillingTab() {
                   <TableHead>
                     <TableRow>
                       <TableCell>App</TableCell>
-                      <TableCell align="right">Billed</TableCell>
-                      <TableCell align="right" sx={{ color: 'text.secondary' }}>Infra cost</TableCell>
-                      <TableCell align="right">Margin</TableCell>
+                      <TableCell align="right">CCU-hrs</TableCell>
+                      <TableCell align="right" sx={{ color: 'text.secondary' }}>Compute</TableCell>
+                      <TableCell align="right" sx={{ color: 'text.secondary' }}>Overhead</TableCell>
+                      <TableCell align="right">Total (retail)</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {(apps || []).length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={4} align="center">
+                        <TableCell colSpan={5} align="center">
                           <Typography variant="body2" color="text.secondary" sx={{ py: 3 }}>
                             No billed usage for this project in this period.
                           </Typography>
@@ -856,6 +970,7 @@ function BillingTab() {
                       .map((a) => {
                         const key = a.appId ?? a.appName
                         const expanded = expandedAppId === key
+                        const decomp = decomposeRate(a.pricing.ccuHours)
                         return (
                           <>
                             <TableRow
@@ -868,52 +983,104 @@ function BillingTab() {
                                 <Typography variant="body2" fontWeight={500}>{a.appName}</Typography>
                               </TableCell>
                               <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                                {formatUSD(a.pricing.retailUsd)}
+                                {decomp.ccuHours.toFixed(2)}
                               </TableCell>
                               <TableCell
                                 align="right"
                                 sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
                               >
-                                {formatUSD(a.pricing.infraUsd)}
+                                {formatUSD(decomp.computeUsd)}
                               </TableCell>
-                              <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                                {formatUSD(a.pricing.marginUsd)}
+                              <TableCell
+                                align="right"
+                                sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
+                              >
+                                +{formatUSD(decomp.overheadUsd)}
+                              </TableCell>
+                              <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                                {formatUSD(decomp.retailUsd)}
                               </TableCell>
                             </TableRow>
                             {expanded && (
                               <TableRow key={`${key}-detail`}>
-                                <TableCell colSpan={4} sx={{ bgcolor: 'action.hover', py: 1.5 }}>
+                                <TableCell colSpan={5} sx={{ bgcolor: 'action.hover', py: 1.5 }}>
+                                  <Box sx={{ maxWidth: 340, mb: 1.5 }}>
+                                    <Typography variant="caption" fontWeight={700} sx={{ display: 'block', mb: 0.5 }}>
+                                      {a.appName} · {decomp.ccuHours.toFixed(2)} CCU-hrs
+                                    </Typography>
+                                    <Divider sx={{ my: 0.5 }} />
+                                    <Stack direction="row" justifyContent="space-between">
+                                      <Typography variant="caption" color="text.secondary">Compute</Typography>
+                                      <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        {formatUSD(decomp.computeUsd)}
+                                      </Typography>
+                                    </Stack>
+                                    <Stack direction="row" justifyContent="space-between">
+                                      <Typography variant="caption" color="text.secondary">Overhead</Typography>
+                                      <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        +{formatUSD(decomp.overheadUsd)}
+                                      </Typography>
+                                    </Stack>
+                                    <Divider sx={{ my: 0.5 }} />
+                                    <Stack direction="row" justifyContent="space-between">
+                                      <Typography variant="caption" color="text.secondary">Subtotal</Typography>
+                                      <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        {formatUSD(decomp.subtotalUsd)}
+                                      </Typography>
+                                    </Stack>
+                                    <Stack direction="row" justifyContent="space-between">
+                                      <Typography variant="caption" color="text.secondary">
+                                        Platform ×{TAX_MULTIPLIER.toFixed(0)}
+                                      </Typography>
+                                      <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        +{formatUSD(decomp.taxUsd)}
+                                      </Typography>
+                                    </Stack>
+                                    <Divider sx={{ my: 0.5 }} />
+                                    <Stack direction="row" justifyContent="space-between">
+                                      <Typography variant="caption" fontWeight={700}>Total</Typography>
+                                      <Typography variant="caption" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        {formatUSD(decomp.retailUsd)}
+                                      </Typography>
+                                    </Stack>
+                                  </Box>
                                   <Table size="small">
                                     <TableHead>
                                       <TableRow>
                                         <TableCell>Line item</TableCell>
                                         <TableCell align="right">CCU-hours</TableCell>
-                                        <TableCell align="right" sx={{ color: 'text.secondary' }}>Infra</TableCell>
-                                        <TableCell align="right">Billed</TableCell>
-                                        <TableCell align="right">Margin</TableCell>
+                                        <TableCell align="right" sx={{ color: 'text.secondary' }}>Compute</TableCell>
+                                        <TableCell align="right" sx={{ color: 'text.secondary' }}>Overhead</TableCell>
+                                        <TableCell align="right">Total</TableCell>
                                       </TableRow>
                                     </TableHead>
                                     <TableBody>
-                                      {a.lineItems.map((li) => (
-                                        <TableRow key={li.category}>
-                                          <TableCell>{LINE_ITEM_LABELS[li.category] ?? li.category}</TableCell>
-                                          <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                                            {li.pricing.ccuHours.toFixed(2)}
-                                          </TableCell>
-                                          <TableCell
-                                            align="right"
-                                            sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
-                                          >
-                                            {formatUSD(li.pricing.infraUsd)}
-                                          </TableCell>
-                                          <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                                            {formatUSD(li.pricing.retailUsd)}
-                                          </TableCell>
-                                          <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                                            {formatUSD(li.pricing.marginUsd)}
-                                          </TableCell>
-                                        </TableRow>
-                                      ))}
+                                      {a.lineItems.map((li) => {
+                                        const liDecomp = decomposeRate(li.pricing.ccuHours)
+                                        return (
+                                          <TableRow key={li.category}>
+                                            <TableCell>{LINE_ITEM_LABELS[li.category] ?? li.category}</TableCell>
+                                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                              {liDecomp.ccuHours.toFixed(2)}
+                                            </TableCell>
+                                            <TableCell
+                                              align="right"
+                                              sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
+                                            >
+                                              {formatUSD(liDecomp.computeUsd)}
+                                            </TableCell>
+                                            <TableCell
+                                              align="right"
+                                              sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}
+                                            >
+                                              +{formatUSD(liDecomp.overheadUsd)}
+                                            </TableCell>
+                                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                                              {formatUSD(liDecomp.retailUsd)}
+                                            </TableCell>
+                                          </TableRow>
+                                        )
+                                      })}
                                     </TableBody>
                                   </Table>
                                 </TableCell>
