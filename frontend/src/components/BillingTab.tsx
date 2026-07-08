@@ -77,18 +77,20 @@ interface PricingOverlay {
   currency: string
 }
 
-// --- New CCU rate model (pricing_config design, 2026-07) --------------------
-// Coordinator/core still return the legacy `infraUsd`/`retailUsd` pair
-// (0.005 / 0.015 per CCU-hr). Until BillingController grows the
-// `overheadUsd`/`taxUsd`/`subtotalUsd` fields natively, we derive the full
-// decomposition client-side from `ccuHours` using the published constants so
-// the UI can show the honest per-app total-cost-of-ownership breakdown.
-// Once the backend PricingConfig bean ships, replace this with the real
-// fields from the API response.
-export const INFRA_RATE_PER_CCU_HOUR = 0.005
-export const OVERHEAD_RATE_PER_CCU_HOUR = 0.131
-export const TAX_MULTIPLIER = 2.0
-export const RETAIL_RATE_PER_CCU_HOUR = (INFRA_RATE_PER_CCU_HOUR + OVERHEAD_RATE_PER_CCU_HOUR) * TAX_MULTIPLIER // 0.272
+// --- CCU rate model (pricing_rate_history, V47 · 2026-07) -------------------
+// Rate is no longer a client-side constant. It's fetched from the coordinator
+// (`GET /api/v1/billing/rate`, backed by the `pricing_rate_history` table) on
+// mount and threaded through props/helpers below, so infra/overhead/tax stay
+// in sync with the single DB-backed source of truth.
+export interface PricingRate {
+  id: string
+  effectiveFrom: string
+  infraRate: number
+  overheadRate: number
+  taxMultiplier: number
+  retailRate: number
+  currency: string
+}
 
 interface RateDecomposition {
   ccuHours: number
@@ -99,11 +101,11 @@ interface RateDecomposition {
   retailUsd: number
 }
 
-function decomposeRate(ccuHours: number): RateDecomposition {
-  const computeUsd = ccuHours * INFRA_RATE_PER_CCU_HOUR
-  const overheadUsd = ccuHours * OVERHEAD_RATE_PER_CCU_HOUR
+function decomposeRate(ccuHours: number, rate: PricingRate): RateDecomposition {
+  const computeUsd = ccuHours * rate.infraRate
+  const overheadUsd = ccuHours * rate.overheadRate
   const subtotalUsd = computeUsd + overheadUsd
-  const retailUsd = subtotalUsd * TAX_MULTIPLIER
+  const retailUsd = subtotalUsd * rate.taxMultiplier
   const taxUsd = retailUsd - subtotalUsd
   return { ccuHours, computeUsd, overheadUsd, subtotalUsd, taxUsd, retailUsd }
 }
@@ -248,9 +250,10 @@ function InfraTag({ infraUsd }: { infraUsd: number }) {
 }
 
 // "Fixed overhead in CCU rate" info tile — explains what's baked into the
-// $0.272/CCU-hr retail rate so a per-app bill is legible instead of looking
-// like an arbitrary multiplier on raw compute.
-function RateInfoTile() {
+// retail rate so a per-app bill is legible instead of looking like an
+// arbitrary multiplier on raw compute. Rate is passed in from the
+// coordinator-fetched `/api/v1/billing/rate` response.
+function RateInfoTile({ rate }: { rate: PricingRate }) {
   return (
     <Card sx={{ mb: 3, borderStyle: 'dashed', borderWidth: 1, borderColor: 'divider' }} variant="outlined">
       <CardContent>
@@ -265,28 +268,28 @@ function RateInfoTile() {
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Compute</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${INFRA_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+              ${rate.infraRate.toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">Runtime + build direct usage</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overhead</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${OVERHEAD_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+              ${rate.overheadRate.toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">Fixed + shared AWS + non-cloud dev cost</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Platform tax</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ×{TAX_MULTIPLIER.toFixed(1)}
+              ×{rate.taxMultiplier.toFixed(1)}
             </Typography>
             <Typography variant="caption" color="text.secondary">Explicit margin multiplier</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Retail rate</Typography>
             <Typography variant="body1" fontWeight={700} color="primary.main" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${RETAIL_RATE_PER_CCU_HOUR.toFixed(3)}/CCU-hr
+              ${rate.retailRate.toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">(Compute + Overhead) × tax</Typography>
           </Grid>
@@ -347,18 +350,20 @@ function sumRetail(rows: AccountBilling[]): number {
 // dev cost) is now folded into the per-CCU-hr rate rather than left as a
 // mystery "Unattributed" bucket. Deriving it from ccuHours means it rolls up
 // account -> summary the same way infra/retail already do.
-function sumOverhead(rows: AccountBilling[]): number {
-  return rows.reduce((acc, r) => acc + r.pricing.ccuHours * OVERHEAD_RATE_PER_CCU_HOUR, 0)
+function sumOverhead(rows: AccountBilling[], rate: PricingRate): number {
+  return rows.reduce((acc, r) => acc + r.pricing.ccuHours * rate.overheadRate, 0)
 }
 
 function BillingPnlCard({
   accounts,
   ceSummary,
   ceByService,
+  rate,
 }: {
   accounts: AccountBilling[]
   ceSummary: CeSummary | null
   ceByService: CeByService | null
+  rate: PricingRate
 }) {
   const [showBreakdown, setShowBreakdown] = useState(false)
 
@@ -382,7 +387,7 @@ function BillingPnlCard({
   // Fixed/shared/dev overhead attributed across all accounts via the CCU
   // rate — this is dollars that used to show up as "Unattributed infra"
   // because the old 0.015 retail rate didn't carry an overhead component.
-  const totalOverhead = sumOverhead(accounts)
+  const totalOverhead = sumOverhead(accounts, rate)
 
   const awsActual = ceSummary?.mtd.cost ?? null
   const unattributed =
@@ -534,6 +539,8 @@ function BillingTab() {
   const [expandedAppId, setExpandedAppId] = useState<string | null>(null)
   const [ceSummary, setCeSummary] = useState<CeSummary | null>(null)
   const [ceByService, setCeByService] = useState<CeByService | null>(null)
+  const [rate, setRate] = useState<PricingRate | null>(null)
+  const [rateError, setRateError] = useState<string | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -545,6 +552,23 @@ function BillingTab() {
     setExpandedAppId(null)
     setAccountFilter('all')
   }, [period])
+
+  // Fetch the current CCU rate once on mount — backed by pricing_rate_history
+  // via the coordinator, replacing the old hardcoded rate constants.
+  useEffect(() => {
+    let cancelled = false
+    coordinatorGet<PricingRate>('/api/v1/billing/rate')
+      .then((r) => {
+        if (!cancelled) setRate(r)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setRateError(err instanceof Error ? err.message : 'Failed to load billing rate')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -627,7 +651,8 @@ function BillingTab() {
         </ToggleButtonGroup>
       </Box>
 
-      <RateInfoTile />
+      {rateError && <Alert severity="warning" sx={{ mb: 2 }}>{rateError}</Alert>}
+      {rate && <RateInfoTile rate={rate} />}
 
       <BillingTrendChart />
 
@@ -710,9 +735,9 @@ function BillingTab() {
 
       {!loading && error && <Alert severity="error">{error}</Alert>}
 
-      {!loading && !error && drill.level === 'accounts' && accounts && (
+      {!loading && !error && drill.level === 'accounts' && accounts && rate && (
         <motion.div variants={item}>
-          <BillingPnlCard accounts={accounts} ceSummary={ceSummary} ceByService={ceByService} />
+          <BillingPnlCard accounts={accounts} ceSummary={ceSummary} ceByService={ceByService} rate={rate} />
         </motion.div>
       )}
 
@@ -936,7 +961,7 @@ function BillingTab() {
         </motion.div>
       )}
 
-      {!loading && !error && drill.level === 'apps' && (
+      {!loading && !error && drill.level === 'apps' && rate && (
         <motion.div variants={item}>
           <Card>
             <CardContent>
@@ -970,7 +995,7 @@ function BillingTab() {
                       .map((a) => {
                         const key = a.appId ?? a.appName
                         const expanded = expandedAppId === key
-                        const decomp = decomposeRate(a.pricing.ccuHours)
+                        const decomp = decomposeRate(a.pricing.ccuHours, rate)
                         return (
                           <>
                             <TableRow
@@ -1030,7 +1055,7 @@ function BillingTab() {
                                     </Stack>
                                     <Stack direction="row" justifyContent="space-between">
                                       <Typography variant="caption" color="text.secondary">
-                                        Platform ×{TAX_MULTIPLIER.toFixed(0)}
+                                        Platform ×{rate.taxMultiplier.toFixed(0)}
                                       </Typography>
                                       <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                                         +{formatUSD(decomp.taxUsd)}
@@ -1056,7 +1081,7 @@ function BillingTab() {
                                     </TableHead>
                                     <TableBody>
                                       {a.lineItems.map((li) => {
-                                        const liDecomp = decomposeRate(li.pricing.ccuHours)
+                                        const liDecomp = decomposeRate(li.pricing.ccuHours, rate)
                                         return (
                                           <TableRow key={li.category}>
                                             <TableCell>{LINE_ITEM_LABELS[li.category] ?? li.category}</TableCell>

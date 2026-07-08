@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
-import { Box, Card, CardContent, Typography, Chip, Stack, useTheme } from '@mui/material'
+import { useEffect, useMemo, useState } from 'react'
+import { Box, Card, CardContent, Typography, Chip, Stack, useTheme, Alert } from '@mui/material'
 import { motion } from 'framer-motion'
 import QueryStatsIcon from '@mui/icons-material/QueryStats'
+import { coordinatorGet } from '../api'
+import type { PricingRate } from './BillingTab'
 
 // --- Validated historical data (2026-07 rate-rebase design doc) ------------
 // AWS Cost Explorer actuals + runtime CCU-hr usage for Jan-Jul 2026 MTD.
@@ -9,9 +11,12 @@ import QueryStatsIcon from '@mui/icons-material/QueryStats'
 // billed in those months (frozen — see V47 pricing_rate_history strategy).
 // Jan/Feb predate CCU metering (n/a). This is a static, already-validated
 // snapshot — not live-fetched — used purely to project what the same usage
-// would have billed under the new $0.272/CCU-hr rate for comparison.
+// would have billed at each month's *effective* retail rate (fetched from
+// /api/v1/billing/rate/history) for comparison, instead of a hardcoded
+// "old vs new" split.
 interface HistoricalMonth {
   label: string
+  monthEnd: string // ISO date, end of month (or "today" for the MTD row) — used to join against effectiveFrom
   awsTotal: number
   fixed: number
   shared: number
@@ -21,20 +26,32 @@ interface HistoricalMonth {
 }
 
 const HISTORY: HistoricalMonth[] = [
-  { label: 'Jan 2026', awsTotal: 791.57, fixed: 343.12, shared: 259.38, attributable: 189.07, runtimeCcuHours: null, runtimeRetailOld: null },
-  { label: 'Feb 2026', awsTotal: 679.83, fixed: 202.64, shared: 244.30, attributable: 232.89, runtimeCcuHours: null, runtimeRetailOld: null },
-  { label: 'Mar 2026', awsTotal: 888.43, fixed: 221.11, shared: 287.21, attributable: 380.10, runtimeCcuHours: 67704, runtimeRetailOld: 1789.62 },
-  { label: 'Apr 2026', awsTotal: 821.94, fixed: 214.94, shared: 280.56, attributable: 326.43, runtimeCcuHours: 65520, runtimeRetailOld: 1704.05 },
-  { label: 'May 2026', awsTotal: 861.81, fixed: 221.11, shared: 293.01, attributable: 347.68, runtimeCcuHours: 67704, runtimeRetailOld: 1760.30 },
-  { label: 'Jun 2026', awsTotal: 854.48, fixed: 214.95, shared: 282.19, attributable: 357.32, runtimeCcuHours: 56784, runtimeRetailOld: 1476.38 },
-  { label: 'Jul MTD', awsTotal: 210.63, fixed: 66.99, shared: 60.90, attributable: 70.32, runtimeCcuHours: 25272, runtimeRetailOld: 657.25 },
+  { label: 'Jan 2026', monthEnd: '2026-01-31', awsTotal: 791.57, fixed: 343.12, shared: 259.38, attributable: 189.07, runtimeCcuHours: null, runtimeRetailOld: null },
+  { label: 'Feb 2026', monthEnd: '2026-02-28', awsTotal: 679.83, fixed: 202.64, shared: 244.30, attributable: 232.89, runtimeCcuHours: null, runtimeRetailOld: null },
+  { label: 'Mar 2026', monthEnd: '2026-03-31', awsTotal: 888.43, fixed: 221.11, shared: 287.21, attributable: 380.10, runtimeCcuHours: 67704, runtimeRetailOld: 1789.62 },
+  { label: 'Apr 2026', monthEnd: '2026-04-30', awsTotal: 821.94, fixed: 214.94, shared: 280.56, attributable: 326.43, runtimeCcuHours: 65520, runtimeRetailOld: 1704.05 },
+  { label: 'May 2026', monthEnd: '2026-05-31', awsTotal: 861.81, fixed: 221.11, shared: 293.01, attributable: 347.68, runtimeCcuHours: 67704, runtimeRetailOld: 1760.30 },
+  { label: 'Jun 2026', monthEnd: '2026-06-30', awsTotal: 854.48, fixed: 214.95, shared: 282.19, attributable: 357.32, runtimeCcuHours: 56784, runtimeRetailOld: 1476.38 },
+  { label: 'Jul MTD', monthEnd: '2026-07-31', awsTotal: 210.63, fixed: 66.99, shared: 60.90, attributable: 70.32, runtimeCcuHours: 25272, runtimeRetailOld: 657.25 },
 ]
 
-const NEW_RETAIL_RATE = 0.272 // published constant, see BillingTab.tsx RETAIL_RATE_PER_CCU_HOUR
+// Picks the rate whose effectiveFrom is the most recent one on or before
+// the given month-end — i.e. the rate that was actually in effect for that
+// month. History is assumed sorted DESC by effectiveFrom (as returned by
+// GET /api/v1/billing/rate/history), matching the coordinator's
+// findAllByOrderByEffectiveFromDesc(). Months that predate every seeded rate
+// (e.g. pre-V47 history) fall back to the earliest known rate rather than
+// showing no projection at all — better an approximation than a gap.
+function effectiveRateFor(monthEnd: string, rateHistory: PricingRate[]): PricingRate | null {
+  if (rateHistory.length === 0) return null
+  const monthEndMs = new Date(monthEnd).getTime()
+  const inEffect = rateHistory.find((r) => new Date(r.effectiveFrom).getTime() <= monthEndMs)
+  return inEffect ?? rateHistory[rateHistory.length - 1]
+}
 
-function projectedNewRetail(ccuHours: number | null): number | null {
-  if (ccuHours === null) return null
-  return ccuHours * NEW_RETAIL_RATE
+function projectedRetailAtEffectiveRate(ccuHours: number | null, rate: PricingRate | null): number | null {
+  if (ccuHours === null || rate === null) return null
+  return ccuHours * rate.retailRate
 }
 
 function formatUSD(n: number): string {
@@ -74,8 +91,33 @@ function pointsToStr(points: ({ x: number; y: number } | null)[]): string {
 function HistoricalRateChart() {
   const theme = useTheme()
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const [rateHistory, setRateHistory] = useState<PricingRate[] | null>(null)
+  const [rateHistoryError, setRateHistoryError] = useState<string | null>(null)
 
-  const projected = useMemo(() => HISTORY.map((m) => projectedNewRetail(m.runtimeCcuHours)), [])
+  useEffect(() => {
+    let cancelled = false
+    coordinatorGet<PricingRate[]>('/api/v1/billing/rate/history')
+      .then((h) => {
+        if (!cancelled) setRateHistory(h)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setRateHistoryError(err instanceof Error ? err.message : 'Failed to load rate history')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const monthRates = useMemo(
+    () => HISTORY.map((m) => (rateHistory ? effectiveRateFor(m.monthEnd, rateHistory) : null)),
+    [rateHistory],
+  )
+
+  const projected = useMemo(
+    () => HISTORY.map((m, i) => projectedRetailAtEffectiveRate(m.runtimeCcuHours, monthRates[i])),
+    [monthRates],
+  )
 
   const { awsPoints, oldRetailPoints, newRetailPoints, gridLines } = useMemo(() => {
     const aws = HISTORY.map((m) => m.awsTotal)
@@ -113,7 +155,9 @@ function HistoricalRateChart() {
 
   const hoverMonth = hoverIdx !== null ? HISTORY[hoverIdx] : null
   const hoverProjected = hoverIdx !== null ? projected[hoverIdx] : null
+  const hoverRate = hoverIdx !== null ? monthRates[hoverIdx] : null
   const hoverAwsPoint = hoverIdx !== null ? awsPoints[hoverIdx] : null
+  const latestRate = rateHistory && rateHistory.length > 0 ? rateHistory[0] : null
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
@@ -126,14 +170,20 @@ function HistoricalRateChart() {
             </Typography>
             <Stack direction="row" spacing={1}>
               <Chip label="AWS actual" size="small" variant="outlined" sx={{ color: 'text.secondary' }} />
-              <Chip label="Old rate ($0.015)" size="small" variant="outlined" color="default" />
-              <Chip label="New rate ($0.272)" size="small" color="primary" variant="filled" />
+              <Chip label="Billed rate (frozen)" size="small" variant="outlined" color="default" />
+              <Chip
+                label={latestRate ? `Effective rate ($${latestRate.retailRate.toFixed(3)})` : 'Effective rate'}
+                size="small"
+                color="primary"
+                variant="filled"
+              />
             </Stack>
           </Box>
+          {rateHistoryError && <Alert severity="warning" sx={{ mb: 2 }}>{rateHistoryError}</Alert>}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Same metered runtime CCU-hrs, replayed at the new retail rate. Jan/Feb predate CCU
-            metering. Historical months are frozen at their billed rate — this line is
-            illustrative only.
+            Same metered runtime CCU-hrs, replayed at each month's effective retail rate from
+            pricing_rate_history. Jan/Feb predate CCU metering. Historical months are frozen at
+            their billed rate — this line is illustrative only.
           </Typography>
 
           <Box sx={{ position: 'relative', width: '100%', height: HEIGHT }}>
@@ -278,10 +328,10 @@ function HistoricalRateChart() {
                   AWS actual: {formatUSD(hoverMonth.awsTotal)}
                 </Typography>
                 <Typography variant="caption" sx={{ display: 'block', color: theme.palette.grey[400], fontVariantNumeric: 'tabular-nums' }}>
-                  Old rate billed: {hoverMonth.runtimeRetailOld !== null ? formatUSD(hoverMonth.runtimeRetailOld) : 'n/a'}
+                  Billed rate (frozen): {hoverMonth.runtimeRetailOld !== null ? formatUSD(hoverMonth.runtimeRetailOld) : 'n/a'}
                 </Typography>
                 <Typography variant="caption" sx={{ display: 'block', color: theme.palette.primary.main, fontVariantNumeric: 'tabular-nums' }}>
-                  New rate (projected): {hoverProjected !== null ? formatUSD(hoverProjected) : 'n/a'}
+                  Effective rate{hoverRate ? ` ($${hoverRate.retailRate.toFixed(3)})` : ''}: {hoverProjected !== null ? formatUSD(hoverProjected) : 'n/a'}
                 </Typography>
                 {hoverMonth.runtimeCcuHours !== null && (
                   <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
