@@ -172,7 +172,7 @@ function HistoricalRateChart() {
               <Chip label="AWS actual" size="small" variant="outlined" sx={{ color: 'text.secondary' }} />
               <Chip label="Billed rate (frozen)" size="small" variant="outlined" color="default" />
               <Chip
-                label={latestRate ? `Effective rate ($${latestRate.retailRate.toFixed(3)})` : 'Effective rate'}
+                label={latestRate ? `Effective rate ($${Number(latestRate.retailRate).toFixed(3)})` : 'Effective rate'}
                 size="small"
                 color="primary"
                 variant="filled"
@@ -331,7 +331,7 @@ function HistoricalRateChart() {
                   Billed rate (frozen): {hoverMonth.runtimeRetailOld !== null ? formatUSD(hoverMonth.runtimeRetailOld) : 'n/a'}
                 </Typography>
                 <Typography variant="caption" sx={{ display: 'block', color: theme.palette.primary.main, fontVariantNumeric: 'tabular-nums' }}>
-                  Effective rate{hoverRate ? ` ($${hoverRate.retailRate.toFixed(3)})` : ''}: {hoverProjected !== null ? formatUSD(hoverProjected) : 'n/a'}
+                  Effective rate{hoverRate ? ` ($${Number(hoverRate.retailRate).toFixed(3)})` : ''}: {hoverProjected !== null ? formatUSD(hoverProjected) : 'n/a'}
                 </Typography>
                 {hoverMonth.runtimeCcuHours !== null && (
                   <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
