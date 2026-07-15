@@ -36,8 +36,7 @@ interface InvitationRecord {
   requestId: string | null
   email: string | null
   projectName: string | null
-  kind: string | null
-  kindTarget: 'SOLO' | 'TRIAL_ACCOUNT' | 'BILLING_ACCOUNT' | null
+  kind: 'SOLO' | 'TRIAL_ACCOUNT' | 'BILLING_ACCOUNT' | null
   accountName: string | null
   maxProjects: number | null
   billingInfoCaptured: boolean | null
@@ -611,7 +610,7 @@ export default function InvitationsTab() {
                   </TableRow>
                 )}
                 {rows.map((inv) => {
-                  const kind = KIND_CHIP[inv.kindTarget || 'SOLO'] || KIND_CHIP.SOLO
+                  const kind = KIND_CHIP[inv.kind || 'SOLO'] || KIND_CHIP.SOLO
                   return (
                     <TableRow key={inv.id} hover>
                       <TableCell>{inv.email || '—'}</TableCell>
@@ -619,7 +618,7 @@ export default function InvitationsTab() {
                         <Chip label={kind.label} size="small" color={kind.color} variant="outlined" />
                       </TableCell>
                       <TableCell>
-                        {inv.kindTarget === 'SOLO' ? (inv.projectName || '—') : (inv.accountName || '—')}
+                        {inv.kind === 'SOLO' ? (inv.projectName || '—') : (inv.accountName || '—')}
                         {inv.maxProjects != null && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                             max {inv.maxProjects} projects
@@ -634,7 +633,7 @@ export default function InvitationsTab() {
                           variant="outlined"
                         />
                       </TableCell>
-                      <TableCell>{inv.kindTarget === 'BILLING_ACCOUNT' ? '—' : formatDate(inv.trialEndOn)}</TableCell>
+                      <TableCell>{inv.kind === 'BILLING_ACCOUNT' ? '—' : formatDate(inv.trialEndOn)}</TableCell>
                       <TableCell>{formatDate(inv.issuedOn)}</TableCell>
                       <TableCell>{formatDate(inv.expiresOn)}</TableCell>
                       <TableCell align="right">
