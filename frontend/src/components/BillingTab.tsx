@@ -268,28 +268,28 @@ function RateInfoTile({ rate }: { rate: PricingRate }) {
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Compute</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${rate.infraRate.toFixed(3)}/CCU-hr
+              ${Number(rate.infraRate).toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">Runtime + build direct usage</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overhead</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${rate.overheadRate.toFixed(3)}/CCU-hr
+              ${Number(rate.overheadRate).toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">Fixed + shared AWS + non-cloud dev cost</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Platform tax</Typography>
             <Typography variant="body1" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ×{rate.taxMultiplier.toFixed(1)}
+              ×{Number(rate.taxMultiplier).toFixed(1)}
             </Typography>
             <Typography variant="caption" color="text.secondary">Explicit margin multiplier</Typography>
           </Grid>
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Retail rate</Typography>
             <Typography variant="body1" fontWeight={700} color="primary.main" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              ${rate.retailRate.toFixed(3)}/CCU-hr
+              ${Number(rate.retailRate).toFixed(3)}/CCU-hr
             </Typography>
             <Typography variant="caption" color="text.secondary">(Compute + Overhead) × tax</Typography>
           </Grid>
@@ -1055,7 +1055,7 @@ function BillingTab() {
                                     </Stack>
                                     <Stack direction="row" justifyContent="space-between">
                                       <Typography variant="caption" color="text.secondary">
-                                        Platform ×{rate.taxMultiplier.toFixed(0)}
+                                        Platform ×{Number(rate.taxMultiplier).toFixed(0)}
                                       </Typography>
                                       <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                                         +{formatUSD(decomp.taxUsd)}
